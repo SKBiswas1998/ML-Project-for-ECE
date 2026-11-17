@@ -32,6 +32,12 @@ physics:
 targets:
   ioff_primary: last                   # 'last' = supplied Ioff (I at V = 1.9 V); 'min' = curve minimum
   ioff_secondary: min                  # reported alongside the primary
+  swing:
+    pchip_points: 2001                 # fine V grid for the PCHIP slope (~1 mV spacing over 1.9 V)
+    min_drop_decades: 1.0              # branches falling less than this have no defined swing (NaN)
+    check_T_K: [4, 40, 78]             # temperatures shown in the swing check figure
+    check_vac_pct: [0.0, 0.6, 1.3, 2.0]  # clean, non-monotone (0.6/1.3), most damaged
+    tangent_half_width_V: 0.15         # plotted tangent extends +/- this around the steepest point
 
 compute:
   device: cpu                          # never assume CUDA
