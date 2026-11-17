@@ -1,0 +1,11 @@
+# CPU-only environment for the WTe2 TIFET ML pipeline.
+# Install torch from the CPU index first (see python/README.md), then: pip install -r requirements.txt
+numpy>=2.0
+pandas>=2.2
+scipy>=1.13
+scikit-learn>=1.5
+torch>=2.4
+matplotlib>=3.8
+pyyaml>=6.0
+pytest>=8.0
+ruff>=0.5
