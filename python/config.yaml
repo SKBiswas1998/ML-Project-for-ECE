@@ -58,6 +58,8 @@ experiments:
   curve_targets: [log10_Ion_Ioff, log10_Ion_Ioff_min, log10_SPD, log10_DED, log10_tau_d,
                   log10_P_dyn, swing_mV_per_dec]   # per curve, inputs (T, vacancy)
   cv_scoring: neg_mean_squared_error
+  mlp_targets: [log10_I, log10_Ion_Ioff, log10_Ion_Ioff_min, swing_mV_per_dec]  # SPD = Ion/Ioff copy; P_dyn, DED, tau ~constant
+  mlp_vacancy_feature: vac_pct         # Stage 4: encoding made no difference (median MAE ratio 1.0)
 
 models:
   ridge:
@@ -75,10 +77,24 @@ models:
     noise_init: 1.0e-3                 # WhiteKernel start; absorbs non-smooth NEGF structure
     noise_bounds: [1.0e-8, 1.0]
     n_restarts_optimizer: 0            # each fit 3-6 s on 638 points; restarts did not change the optimum
+  mlp:                                 # PyTorch, CPU, full-batch Adam on standardised X and y
+    width: [64, 128]                   # units per hidden layer (tuned)
+    depth: [2, 3]                      # hidden layers (tuned)
+    weight_decay: [0.0, 1.0e-4]        # L2 penalty in AdamW (tuned)
+    dropout: 0.0                       # fixed: data are noiseless simulation output
+    learning_rate: 3.0e-3
+    max_epochs: 1500
+    patience: 100                      # early stopping: epochs without validation improvement
+    eval_every: 5                      # epochs between validation checks (copying weights is costly)
+    batch_size: 512                    # rows per Adam step; tasks with fewer rows train full-batch
+    early_stop_fraction: 0.15          # share of training CURVES held out for early stopping
+    seeds: [0, 1, 2, 3, 4]             # initialisation seeds; tuning uses the first
+    point_grid_override:               # log10_I (12,760 rows, ~50 s per fit): smaller grid to fit the budget
+      weight_decay: [1.0e-4]
   seed: 0                              # random_state for every stochastic sklearn model
 
 compute:
   device: cpu                          # never assume CUDA
-  torch_threads: 4
-  n_jobs: 4
+  torch_threads: 1                     # per MLP fit; fits run in parallel instead (small nets scale poorly)
+  n_jobs: 2                            # parallel fits; 4 ran the PC out of memory during the MLP run
   num_workers: 0                       # DataLoader workers; 0 is required on Windows
