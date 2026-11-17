@@ -33,3 +33,12 @@ We compared two naive baselines (per-vacancy mean, nearest neighbour) with ridge
 - **The vacancy encoding (percent vs. number of atoms) makes no difference.** The median MAE ratio across jobs is 1.0.
 
 The lesson: the models learn temperature well but cannot predict a vacancy layout they have not seen. With one nested random layout, the data contain no information about how a *different* set of missing atoms would behave.
+
+## Stage 5: does a neural network do better?
+We trained a small MLP (2–3 layers, 64–128 units) with 5 random seeds. Numbers are mean ± std over the seeds, MAE in decades, from `results/mlp_vs_classical.csv`.
+- **Known layouts: no.** On the supplied split the MLP reaches log10 I MAE 0.030 ± 0.005, against the GP's 0.001. For log10 Ion/Ioff it is 0.352 ± 0.117, worse even than nearest neighbour (0.056). With only about 600 curves, the GP's built-in smoothness wins.
+- **Unseen vacancy block: no.** Its log10 Ion/Ioff MAE is 0.629 ± 0.032, against 0.492 for the naive per-vacancy mean.
+- **Vacancy extrapolation (1.6–2.0 %): yes, for the curve-level targets.** log10 Ion/Ioff MAE is 1.080 ± 0.343 against ridge's 2.124 (skill 0.76), and all 5 seeds beat ridge (`results/metrics_mlp.csv`). The MLP continues the downward trend of Ion/Ioff with vacancy, while the linear and naive models stay near the training average. With a single layout this is one lucky-or-not trend, not proof of learned physics. For the I–V curves the MLP is worse there (1.572 ± 0.800 vs. boosting 0.480).
+- **Seeds matter.** The spread across seeds is large for extrapolation, e.g. log10 I MAE from 0.98 to 2.75 (`results/metrics_mlp.csv`).
+
+The honest answer to "does the neural network beat simpler models?" is mostly no. It is the best model only when extrapolating the on/off ratio beyond the trained vacancy range, and even there it errs by about 1 decade.

@@ -56,3 +56,18 @@ Stage 3 questions were unanswered, so the defaults apply: no final-split embargo
 - **I–V target via one model per gate voltage** for the naive baselines and the GP (`Gatewise`). Ridge, polynomial ridge and boosting use the gate as a third input instead.
 - **Skill uses the better of the two naive baselines on the same test set.** This is a fixed reference, not a tuned choice.
 - **Near-zero GP error on the supplied split is NOT leakage.** It was checked before reporting. No (T, vacancy) key is shared across any split, and at a fixed vacancy level log10 Ion/Ioff changes by a median of 0.0016 decades per 2 K step (90th percentile 0.11). The supplied test curves sit between training temperatures with the same layout, so the supplied split is nearly trivial. Numbers per model and protocol are in `results/metrics_classical.csv`.
+
+## 2026-11-17 — Stage 5 (MLP)
+
+- **New module `neural.py`** (not in the Stage 0 layout). The MLP is about 100 lines and `models.py` should keep one job. `models.build_model("mlp")` imports it, so data still flows one way.
+- **Training:** AdamW with mini-batches of 512 rows (full-batch for curve-level tasks with ≤ 638 rows), up to 1,500 epochs, early stopping with patience 100 checked every 5 epochs. *Rejected:* full-batch for log10_I. In a test it was still improving at epoch 3,000 after 118 s, whereas mini-batch reached a better test MAE (0.040 vs. 0.141, supplied split, 128 × 3) in 48 s. These are scratch timings, not results.
+- **Early-stopping set = 15 % of training curves, chosen at random.** Whole curves, so no gate point of a training curve is used to stop. *Rejected:* a vacancy block. Early stopping only decides when to stop, and blocked CV already does the honest hyperparameter selection.
+- **SiLU activation:** smooth, so predicted curves have no ReLU kinks. **Dropout 0:** the data are noiseless simulation output.
+- **Grid:** width {64, 128} × depth {2, 3} × weight decay {0, 1e-4} for curve targets. For log10_I (about 50 s per fit) weight decay is fixed at 1e-4 to fit the CPU budget (`point_grid_override`). Tuning uses seed 0, then the chosen model is refitted with seeds 0–4.
+- **MLP targets:** log10_I, both Ion/Ioff definitions, swing. SPD is skipped (it equals V_DS·Ioff and has the same error as Ion/Ioff in Stage 4), as are the nearly constant P_dyn, DED and tau_d. Only the vac_pct encoding is used, because Stage 4 showed the encoding does not matter.
+- **Cache keys scoped per step:** the classical cache ignores MLP-only config keys, so adding the MLP did not invalidate the 19-minute classical run (hash unchanged: b3de8b8f).
+- **Parallelism:** one torch thread per fit, with CV fits and seeds run 4 at a time (`compute.n_jobs`).
+- **Result check (not leakage, but checked):** the MLP's vacancy-extrapolation win on log10 Ion/Ioff holds for every seed (MAE 0.75–1.63 vs. ridge 2.12, `results/metrics_mlp.csv`). It comes from extrapolating the falling trend.
+- **Compute budget EXCEEDED.** The MLP step took about 3,890 s of fitting in total (sum of `fit_seconds` in `results/metrics_mlp.csv`), of which log10_I took about 3,025 s. With the classical step (1,132 s) the full run is about 84 min against the "well under an hour" target. Fix options are in the Stage 5 review; nothing has been changed yet.
+- **Memory:** the first MLP run was stopped by the system for low memory with 4 parallel fits. `compute.n_jobs` is now 2. Speed only, not results; not part of the cache key.
+- **Early stopping cap:** 4 of the 80 seed fits stopped at the 1,500-epoch limit rather than by patience (`best_epochs` in `results/metrics_mlp.csv`), all on curve-level supplied-split tasks.

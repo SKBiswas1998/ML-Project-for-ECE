@@ -96,3 +96,13 @@ $$ \widehat{\mathrm{Err}}(\theta) = \frac{1}{K}\sum_{k=1}^{K} \frac{1}{|B_k|}\su
 **Equation.** $\mu(x_*) = k_*^\top (K + \sigma_n^2 I)^{-1} y,\quad \sigma^2(x_*) = k(x_*,x_*) - k_*^\top (K+\sigma_n^2 I)^{-1} k_*$
 **Why here.** The data are small (≤ 638 curves per fit) and smooth in T, and an error bar is valuable. For I–V curves we fit one GP per gate voltage, which keeps every kernel matrix at most 638 × 638. Fitting on all 12,760 rows would be about 1.3 GB and slow.
 **Failure mode.** With the default bounds the vacancy length scale collapsed to 10⁻⁵, a worse local optimum that treats every vacancy level as unrelated. We bound it below at 0.05 standardised units. Even then, for an unseen layout the GP reverts towards its mean with wide error bars, because neighbouring levels genuinely do not predict each other well.
+
+## Modules added in Stage 5
+
+**neural.py** implements a small PyTorch MLP (`MLPRegressor`) with the same sklearn interface, so it goes through the same blocked-CV grid search and evaluation as every other model. It standardises X and y internally, trains with AdamW and MSE in mini-batches, and stops early on a random 15 % of the training **curves**. Whole curves are held out, never single gate points, so early stopping does not peek at gate points of curves it trains on. It runs on CPU with one thread per fit, and several fits run in parallel. `run_experiments.py mlp` tunes width, depth and weight decay by blocked CV with the first seed, refits with 5 seeds, and writes `results/metrics_mlp.csv` (per seed) and `results/mlp_vs_classical.csv` (mean ± std over seeds next to the best classical and best naive model).
+
+## Technique: multi-layer perceptron (neural networks)
+**Idea.** A stack of linear layers with a smooth non-linearity (SiLU) between them. It learns any smooth function of (T, vacancy, gate) by gradient descent on the squared error. Width and depth set its capacity, weight decay penalises large weights, and early stopping halts training when the error on held-out curves stops falling.
+**Equation (one hidden layer shown; we use 2–3).** $\hat y(x) = w_2^\top\, \sigma(W_1 x + b_1) + b_2,\quad \min_\theta \tfrac1n\sum_i (y_i - \hat y(x_i))^2 + \lambda\lVert\theta\rVert^2$
+**Why here.** One network can represent the whole I–V surface, including the sharp drop, without fixing its shape in advance, and it scales linearly in the number of rows (unlike a GP).
+**Failure mode here.** Only 798 curves from one nested layout: the network can memorise layout-specific bumps it cannot generalise. Results also depend on the random initialisation, so we report the mean ± std over 5 seeds. With dropout 0 and noiseless data, early stopping and weight decay are the only regularisers.
