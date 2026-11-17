@@ -24,3 +24,12 @@ Stage 1 choices:
 - The expected row counts and seed live in config.yaml rather than in the code.
 - `vac_atoms` keeps MATLAB's 1-based indices and is never used to index a Python array. *Rejected:* converting to 0-based, because that invites off-by-one errors when comparing against the MATLAB code.
 - Train/test is a `split` column on each table, so pooled protocols are a concat with no bookkeeping.
+
+## 2026-11-17 — Stage 2 (targets and swing)
+
+- **Swing method:** PCHIP on the falling branch (index 0 to the curve minimum), taking the steepest slope on a 2001-point grid, as you specified. The raw-grid value is saved next to it as `swing_raw_mV_per_dec`. *Rejected:* a cubic spline, which overshoots between points and could invent slopes steeper than the data. *Rejected:* a fitted straight line over a decade window, because many branches cover a decade in a single grid step.
+- **Swing status: SUPPORTING result, not a main target.** The swing is set by single grid steps. On the falling branch the median steepest step drops 2.04 decades, and 441 of 798 curves have one step steeper than 2 decades (scratch check, re-derivable from `results/curve_targets.csv` together with the IV CSVs). The PCHIP swing is lower than the raw-grid swing for every curve (enforced by a test). The ratio has median 0.80 and range 0.57–0.98, so the reported swing depends on the interpolation choice by up to a factor of about 1.75.
+- **Boltzmann comparison:** none of the 798 curves is below kT ln10/q, and the clean device's swing hardly depends on T (34.8, 32.3, 37.7 mV/dec at 4, 40, 78 K, from `results/curve_targets.csv`). The switching is therefore not thermionic, and kT ln10/q is a reference line, not a bound this device is fighting.
+- **Ion/Ioff:** both definitions are in `curve_targets.csv`. `log10_Ion_Ioff` is the supplied end-point value (primary) and `log10_Ion_Ioff_min` uses the curve minimum.
+- **Dynamic power = DED / tau_d** (config `physics.dynamic_power`), the only convention allowed in the code. Note: log10_P_dyn spans only −6.714 to −6.647 over all 798 curves (`results/curve_targets.csv`), so it is nearly constant and a weak ML target. The same is true of log10 DED and log10 tau_d, which span less than 0.5 decades.
+- **Results flow:** `run_experiments.py targets` writes `results/curve_targets.csv` and `results/swing_by_vacancy.csv`. The figure script reads the data package directly only for the raw-curve check plot.
