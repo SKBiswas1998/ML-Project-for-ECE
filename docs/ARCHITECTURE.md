@@ -53,3 +53,14 @@
 $$ \frac{w_1+w_2}{d_k} = \frac{w_1}{\delta_{k-1}} + \frac{w_2}{\delta_k}, \quad d_k = 0 \text{ if } \delta_{k-1}\delta_k \le 0 $$
 **Why here.** Currents fall by up to 5 decades between neighbouring points, and overshoot would create fake steep slopes.
 **Failure mode here.** When the drop happens in one step, the steepest slope is decided by the interpolant's shape inside that step, not by data. PCHIP then reports a swing up to about 1.75× lower than the raw grid (see DECISIONS, Stage 2).
+
+## Modules added in Stage 3
+
+**splits.py** defines every way the 798 curves are divided. A `Split` holds two key tables (train, test), and `Split.apply(table)` selects the rows of any table by curve key, so IV rows and curve targets are split identically. `all_protocols` returns the four final splits: supplied, temperature forward-chaining (≤ 60 K → 62–78 K), vacancy block (hold out 0.8–1.2 %) and vacancy extrapolation (≤ 1.5 % → 1.6–2.0 %). `blocked_cv_folds` produces the hyperparameter-tuning folds inside one training pool. `run_experiments.py splits` writes `results/split_summary.csv`, which lists every split and fold with its sizes and ranges.
+
+## Technique: blocked cross-validation with embargo (supervised learning: model selection)
+**Idea.** Ordinary k-fold CV assumes samples are independent. Ours are not: neighbouring vacancy levels share all but 1–2 removed atoms, so a random fold would validate on near-copies of training devices and pick over-flexible models. We therefore hold out a whole block of consecutive vacancy levels. We also drop the levels next to it from training (the embargo), because they are the closest copies.
+**Equation (CV estimate of the error of hyperparameter θ over K blocks B_k, embargo set E_k):**
+$$ \widehat{\mathrm{Err}}(\theta) = \frac{1}{K}\sum_{k=1}^{K} \frac{1}{|B_k|}\sum_{i \in B_k} \big(y_i - \hat f_\theta^{(-B_k \cup E_k)}(x_i)\big)^2 $$
+**Why here.** The final tests ask the model to predict whole unseen vacancy ranges or temperatures. Blocked CV makes the tuning task resemble that.
+**Failure mode here.** The layouts are nested, so every level still contains all atoms of the levels below it. The embargo reduces this leakage but cannot remove it. With only 5 blocks, the CV estimate is also noisy.

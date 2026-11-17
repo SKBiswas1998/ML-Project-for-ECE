@@ -15,3 +15,12 @@ Every target is in log10, because the off-current covers about 12 decades.
 - **Power and energy.** Static power, switching energy, delay and dynamic power follow from Ion, Ioff and the capacitance by simple formulas. Dynamic power is almost constant, so it will not be an interesting target.
 - **Swing.** The subthreshold swing is measured on the falling part of each curve with a smooth, non-overshooting interpolation (PCHIP). We then looked at 12 sample curves (`figures/swing_check.png`). The gate grid is coarse, and in many curves one step drops two decades or more, so swing is a supporting result.
 - **Physics note.** No curve switches more steeply than the thermal limit kT ln10/q. For the clean device the swing is about the same at 4 K and 78 K, which points to gate-controlled gap opening of the edge states rather than electrons climbing over a barrier.
+
+## Stage 3: how do we test fairly?
+A model is only as trustworthy as its test. We split by whole curves, never by individual points, and use four protocols:
+1. **Supplied split**: easy interpolation.
+2. **Temperature forward-chaining**: learn 4–60 K, predict 62–78 K.
+3. **Vacancy block**: predict 0.8–1.2 % without having seen it.
+4. **Vacancy extrapolation**: learn ≤ 1.5 %, predict 1.6–2.0 %.
+
+Model settings are chosen only inside each training pool, with blocked cross-validation. A whole block of neighbouring vacancy levels is held out, and the levels next to it are dropped too (the embargo), because nested layouts make neighbours near-copies. The tests prove that no curve crosses sides and that the embargo holds. A deliberately broken version fails them.

@@ -33,3 +33,15 @@ Stage 1 choices:
 - **Ion/Ioff:** both definitions are in `curve_targets.csv`. `log10_Ion_Ioff` is the supplied end-point value (primary) and `log10_Ion_Ioff_min` uses the curve minimum.
 - **Dynamic power = DED / tau_d** (config `physics.dynamic_power`), the only convention allowed in the code. Note: log10_P_dyn spans only −6.714 to −6.647 over all 798 curves (`results/curve_targets.csv`), so it is nearly constant and a weak ML target. The same is true of log10 DED and log10 tau_d, which span less than 0.5 decades.
 - **Results flow:** `run_experiments.py targets` writes `results/curve_targets.csv` and `results/swing_by_vacancy.csv`. The figure script reads the data package directly only for the raw-curve check plot.
+
+## 2026-11-17 — Stage 3 (splits and blocked CV)
+
+Stage 2 open questions were unanswered, so the defaults apply: end-point Ion/Ioff is primary, and P_dyn, DED and tau_d are kept as targets, flagged as nearly constant.
+- **Splits are defined on curves, never on rows.** A split is two sets of (T_K, vacancy level) keys, and rows are assigned by key. A test applies every split to all 15,960 IV rows and checks that each curve's 20 points stay on one side. *Rejected:* random row splits, which would put gate points of the same sweep on both sides.
+- **Vacancy levels as integers** (round(vac_pct / 0.1)). This avoids float bugs such as 0.30000000000000004 ≠ 0.3, and a test covers it.
+- **Protocol 3a block = 0.8–1.2 %** (5 levels × 38 T = 190 test curves). **Protocol 3b**: train ≤ 1.5 %, test 1.6–2.0 % (190 test curves). Counts are in `results/split_summary.csv`.
+- **No embargo around the FINAL test blocks** (`holdout_embargo_levels: 0`). You asked for the embargo in CV. Adding one to the final hold-outs would also remove 0.7 and 1.3 % (76 curves) from training. It is one config value if you want it.
+- **CV blocks:** the training pool's distinct levels are split into 5 consecutive blocks with `np.array_split` (sizes 5/4/4/4/4 for 21 levels), and an embargo of 1 level each side applies. The embargo is measured in grid steps, so it stays correct when the pool has a gap. Each fold loses about 25–30 % of its training curves (`results/split_summary.csv`, e.g. supplied fold 0 trains on 449 of the 638 pool curves).
+- **Known quirk:** in the 3a pool (levels 0–0.7 and 1.3–2.0) one CV block is {0.7, 1.3, 1.4}. It is consecutive within the pool but straddles the held-out gap. Left as is, because it validates on a jump similar to the one the final test asks for. *Alternative:* never let a block cross a gap.
+- **CV for protocol 2 is still over vacancy blocks,** as you specified. So hyperparameters for the temperature-extrapolation test are not tuned on a temperature-extrapolation objective. *Alternative:* forward-chaining CV over T inside 4–60 K.
+- **Verified by mutation:** with the embargo disabled, `test_cv_uses_only_training_pool_and_respects_embargo` fails for all 4 protocols.
