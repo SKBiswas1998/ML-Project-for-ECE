@@ -45,3 +45,14 @@ Stage 2 open questions were unanswered, so the defaults apply: end-point Ion/Iof
 - **Known quirk:** in the 3a pool (levels 0–0.7 and 1.3–2.0) one CV block is {0.7, 1.3, 1.4}. It is consecutive within the pool but straddles the held-out gap. Left as is, because it validates on a jump similar to the one the final test asks for. *Alternative:* never let a block cross a gap.
 - **CV for protocol 2 is still over vacancy blocks,** as you specified. So hyperparameters for the temperature-extrapolation test are not tuned on a temperature-extrapolation objective. *Alternative:* forward-chaining CV over T inside 4–60 K.
 - **Verified by mutation:** with the embargo disabled, `test_cv_uses_only_training_pool_and_respects_embargo` fails for all 4 protocols.
+
+## 2026-11-17 — Stage 4 (classical models)
+
+Stage 3 questions were unanswered, so the defaults apply: no final-split embargo, and vacancy-block CV for every protocol.
+- **GP kernel chosen by log marginal likelihood, not CV** *(change from the brief, which listed "GP kernel" among the CV-tuned hyperparameters)*. One GP fit on 638 points takes 3–6 s. CV over 2 kernels × 5 folds × 20 gates would make each I–V job take about half an hour. The marginal likelihood is the GP's own principled criterion. *Rejected:* fewer gates, or subsampled data.
+- **GP length scales bounded to [0.05, 100]** (standardised units). With the default bounds the vacancy length scale collapsed to 1e-5, and the log marginal likelihood was lower: 2175 vs. 2272 on the training curves at gate 1.4 V, 0.05 bound (scratch check). The bound improves the GP's own objective.
+- **CV only for models with a grid** (ridge, polynomial ridge, boosting). The naive baselines and the GP have nothing to tune by CV, so their `cv_mse` is NaN.
+- **log10_I runs only with vac_pct** (`experiments.point_vacancy_features`). The per-gate GP costs about 170 s per job. Both vacancy encodings are compared on all 7 curve-level targets.
+- **I–V target via one model per gate voltage** for the naive baselines and the GP (`Gatewise`). Ridge, polynomial ridge and boosting use the gate as a third input instead.
+- **Skill uses the better of the two naive baselines on the same test set.** This is a fixed reference, not a tuned choice.
+- **Near-zero GP error on the supplied split is NOT leakage.** It was checked before reporting. No (T, vacancy) key is shared across any split, and at a fixed vacancy level log10 Ion/Ioff changes by a median of 0.0016 decades per 2 K step (90th percentile 0.11). The supplied test curves sit between training temperatures with the same layout, so the supplied split is nearly trivial. Numbers per model and protocol are in `results/metrics_classical.csv`.

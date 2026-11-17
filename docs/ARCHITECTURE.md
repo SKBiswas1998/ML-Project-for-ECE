@@ -64,3 +64,35 @@ $$ \frac{w_1+w_2}{d_k} = \frac{w_1}{\delta_{k-1}} + \frac{w_2}{\delta_k}, \quad 
 $$ \widehat{\mathrm{Err}}(\theta) = \frac{1}{K}\sum_{k=1}^{K} \frac{1}{|B_k|}\sum_{i \in B_k} \big(y_i - \hat f_\theta^{(-B_k \cup E_k)}(x_i)\big)^2 $$
 **Why here.** The final tests ask the model to predict whole unseen vacancy ranges or temperatures. Blocked CV makes the tuning task resemble that.
 **Failure mode here.** The layouts are nested, so every level still contains all atoms of the levels below it. The embargo reduces this leakage but cannot remove it. With only 5 blocks, the CV estimate is also noisy.
+
+## Modules added in Stage 4
+
+**models.py** gives every model the same `fit(X, y)` / `predict(X)` interface. X is [T_K, vacancy] for curve-level targets and [T_K, vacancy, gate_V] for log10 I. `build_model(name, cfg, pointwise)` returns an unfitted estimator and its hyperparameter grid. `Gatewise` turns any curve-level model into an I–V model by fitting one copy per gate voltage. `KernelSelectGP` fits each candidate GP kernel and keeps the best by marginal likelihood. `tune_and_fit` runs blocked-CV grid search (only for models that have a grid) and refits on the whole training pool. A future PINN only needs fit/predict (`Regressor` protocol).
+
+**evaluate.py** computes MAE, RMSE, MSE, R² and the skill score. Targets are already in log10 (or mV/dec), so the errors are in decades directly.
+
+**run_experiments.py classical** runs every (protocol, vacancy encoding, target, model) job. It caches each one under `results/cache/classical_<config hash>/`, so a run resumes after interruption and a config change triggers a recompute. It writes `results/predictions_classical.csv.gz` (every test prediction, with GP std) and `results/metrics_classical.csv` (one row per job, with skill against the best naive baseline of the same task).
+
+## Technique: naive baselines (reference point for the skill score)
+**Idea.** A model is only useful if it beats a trivial guess. *Per-vacancy mean*: predict the average of the training curves at the same, or nearest, vacancy level, ignoring temperature. *Nearest neighbour*: copy the training curve closest in standardised (T, vacancy).
+**Equation.** $\hat y(x) = y_{j^*},\ j^* = \arg\min_j \lVert z(x) - z(x_j)\rVert_2$, with $z$ = standardised inputs.
+**Why here.** At a fixed layout the curves change slowly with T, so 1-NN is already a strong baseline for interpolation.
+**Failure mode.** For an unseen vacancy level both baselines copy the nearest level, and with nested, non-monotone layouts that can be badly wrong.
+
+## Technique: ridge and polynomial ridge (supervised learning: regression, regularisation)
+**Idea.** A linear model in the inputs, or in all their products up to degree d, fitted by least squares with a penalty on large coefficients. The penalty α trades bias for variance and is chosen by blocked CV.
+**Equation.** $\hat\beta = \arg\min_\beta \lVert y - \Phi\beta\rVert^2 + \alpha\lVert\beta\rVert^2 = (\Phi^\top\Phi + \alpha I)^{-1}\Phi^\top y$
+**Why here.** It is the simplest smooth model of three inputs and makes a transparent reference.
+**Failure mode.** The I–V curves have sharp, step-like drops (up to 5 decades per 0.1 V), and a low-degree polynomial cannot bend that fast. High degrees oscillate between grid points.
+
+## Technique: gradient boosting (supervised learning: ensembles)
+**Idea.** Add many shallow regression trees one after another, each fitted to the remaining errors of the sum so far, scaled by a learning rate. Tree depth and the number of trees are tuned by blocked CV. We use sklearn's histogram-based version.
+**Equation.** $F_m(x) = F_{m-1}(x) + \nu\, h_m(x),\ h_m \approx \arg\min_h \sum_i \big(r_i^{(m)} - h(x_i)\big)^2,\ r_i^{(m)} = y_i - F_{m-1}(x_i)$
+**Why here.** Trees handle steps and thresholds naturally, which suits sudden switching.
+**Failure mode.** Trees predict piecewise-constant values and cannot extrapolate. Above 60 K, or beyond 1.5 % vacancy, they repeat the edge of the training data.
+
+## Technique: Gaussian-process regression (supervised learning: kernel methods, uncertainty)
+**Idea.** A prior over smooth functions, defined by a kernel that says how strongly two inputs are correlated. Conditioning on the training data gives a predictive mean and a standard deviation at every new input. The kernel's length scales (one per input) and noise level are fitted by maximising the marginal likelihood, and the same criterion picks RBF vs. Matérn-5/2.
+**Equation.** $\mu(x_*) = k_*^\top (K + \sigma_n^2 I)^{-1} y,\quad \sigma^2(x_*) = k(x_*,x_*) - k_*^\top (K+\sigma_n^2 I)^{-1} k_*$
+**Why here.** The data are small (≤ 638 curves per fit) and smooth in T, and an error bar is valuable. For I–V curves we fit one GP per gate voltage, which keeps every kernel matrix at most 638 × 638. Fitting on all 12,760 rows would be about 1.3 GB and slow.
+**Failure mode.** With the default bounds the vacancy length scale collapsed to 10⁻⁵, a worse local optimum that treats every vacancy level as unrelated. We bound it below at 0.05 standardised units. Even then, for an unseen layout the GP reverts towards its mean with wide error bars, because neighbouring levels genuinely do not predict each other well.

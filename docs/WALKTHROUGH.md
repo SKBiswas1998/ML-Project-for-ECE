@@ -24,3 +24,12 @@ A model is only as trustworthy as its test. We split by whole curves, never by i
 4. **Vacancy extrapolation**: learn ≤ 1.5 %, predict 1.6–2.0 %.
 
 Model settings are chosen only inside each training pool, with blocked cross-validation. A whole block of neighbouring vacancy levels is held out, and the levels next to it are dropped too (the embargo), because nested layouts make neighbours near-copies. The tests prove that no curve crosses sides and that the embargo holds. A deliberately broken version fails them.
+
+## Stage 4: do classical models beat a trivial guess?
+We compared two naive baselines (per-vacancy mean, nearest neighbour) with ridge, polynomial ridge, gradient boosting and a Gaussian process on all four protocols. MAE is in decades and all numbers are from `results/metrics_classical.csv` (vacancy encoding `vac_pct`).
+- **Known layouts (supplied split, temperature forward-chaining): the GP wins clearly.** For log10 I the MAE is 0.001 (supplied) and 0.019 (62–78 K), against 0.020 and 0.057 for nearest neighbour, giving skill 1.00 and 0.89. The near-zero supplied error was checked for leakage. There is none: at a fixed vacancy level the curves barely change between neighbouring temperatures, so the supplied test set is close to trivial.
+- **Unseen vacancy levels: nothing reliably beats the naive guess.** Holding out 0.8–1.2 %, the best log10 Ion/Ioff MAE is the per-vacancy mean (0.492). Boosting reaches 0.520 (skill 0.10, on MSE) and the GP 0.879 (skill −1.57). Extrapolating to 1.6–2.0 %, every model is off by about 2–4 decades in Ion/Ioff.
+- **Ridge and polynomial ridge are poor everywhere for I–V curves** (log10 I MAE 0.82–1.42), because the step-like switching cannot be captured by low-order polynomials.
+- **The vacancy encoding (percent vs. number of atoms) makes no difference.** The median MAE ratio across jobs is 1.0.
+
+The lesson: the models learn temperature well but cannot predict a vacancy layout they have not seen. With one nested random layout, the data contain no information about how a *different* set of missing atoms would behave.
