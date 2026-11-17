@@ -131,3 +131,18 @@ def blocked_cv_folds(train_keys: pd.DataFrame, cfg: dict[str, Any]) -> list[Spli
         drop = _near(lv, block.min(), block.max(), s["cv_embargo_levels"]) & ~val
         folds.append(_make(f"cv_fold{i}", keys, val, drop, s["vac_step_pct"]))
     return folds
+
+
+def fold_indices(table: pd.DataFrame, folds: list[Split]) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Positional (train_idx, val_idx) of ``table`` rows for each fold (GridSearchCV ``cv``).
+
+    ``table`` must have a default RangeIndex (positions == labels); rows of curves that a
+    fold drops (embargo) appear in neither array.
+    """
+    if not table.index.equals(pd.RangeIndex(len(table))):
+        raise ValueError("fold_indices needs a table with a fresh RangeIndex")
+    out = []
+    for f in folds:
+        tr, va = f.apply(table)
+        out.append((tr.index.to_numpy(), va.index.to_numpy()))
+    return out

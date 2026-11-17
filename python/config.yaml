@@ -48,6 +48,35 @@ splits:
   cv_n_blocks: 5                       # hyperparameter CV: blocks of consecutive vacancy levels
   cv_embargo_levels: 1                 # levels dropped on each side of the held-out CV block
 
+inputs:
+  vacancy_features: [vac_pct, n_vac_atoms]   # each model is run once per vacancy encoding
+  gate_decimals: 6                     # gate values rounded to this for exact per-gate grouping
+
+experiments:
+  point_target: log10_I                # per gate point, inputs (T, vacancy, gate)
+  point_vacancy_features: [vac_pct]    # log10_I runs one encoding only: the per-gate GP costs ~170 s/job
+  curve_targets: [log10_Ion_Ioff, log10_Ion_Ioff_min, log10_SPD, log10_DED, log10_tau_d,
+                  log10_P_dyn, swing_mV_per_dec]   # per curve, inputs (T, vacancy)
+  cv_scoring: neg_mean_squared_error
+
+models:
+  ridge:
+    alpha: [1.0e-4, 1.0e-2, 1.0, 100.0]
+  poly_ridge:
+    degree: [2, 3, 4, 5]
+    alpha: [1.0e-4, 1.0e-2, 1.0]
+  boosting:                            # sklearn HistGradientBoostingRegressor
+    max_depth: [2, 4, 6]
+    max_iter: [100, 300]               # number of trees
+    learning_rate: 0.1
+  gp:                                  # one GP per gate point for log10_I; <= 638 points each
+    kernels: [rbf, matern25]           # chosen per fit by log marginal likelihood (not CV, see DECISIONS)
+    length_scale_bounds: [0.05, 100.0] # standardised units; 0.05 < one vacancy step (~0.17) -> levels may decorrelate
+    noise_init: 1.0e-3                 # WhiteKernel start; absorbs non-smooth NEGF structure
+    noise_bounds: [1.0e-8, 1.0]
+    n_restarts_optimizer: 0            # each fit 3-6 s on 638 points; restarts did not change the optimum
+  seed: 0                              # random_state for every stochastic sklearn model
+
 compute:
   device: cpu                          # never assume CUDA
   torch_threads: 4
