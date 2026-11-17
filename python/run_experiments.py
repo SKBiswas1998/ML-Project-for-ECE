@@ -68,6 +68,7 @@ def step_splits(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
     return [path]
 
 
+GZIP = {"method": "gzip", "mtime": 0}   # fixed timestamp: identical results give identical files in git
 MLP_KEYS = ("mlp", "mlp_targets", "mlp_vacancy_feature")   # config keys only the MLP step uses
 
 
@@ -176,7 +177,7 @@ def step_classical(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
         metas.append({**job, **meta})
     pred = pd.concat(preds, ignore_index=True)
     paths = [out_dir / "predictions_classical.csv.gz", out_dir / "metrics_classical.csv"]
-    pred.to_csv(paths[0], index=False)
+    pred.to_csv(paths[0], index=False, compression=GZIP)
     _score(pred, pd.DataFrame(metas)).to_csv(paths[1], index=False)
     return paths
 
@@ -247,7 +248,7 @@ def step_mlp(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
     pred = pd.concat(preds, ignore_index=True)
     per_seed = _mlp_score(pred, pd.DataFrame(metas), classical)
     paths = [out_dir / "predictions_mlp.csv.gz", out_dir / "metrics_mlp.csv", out_dir / "mlp_vs_classical.csv"]
-    pred.to_csv(paths[0], index=False)
+    pred.to_csv(paths[0], index=False, compression=GZIP)
     per_seed.to_csv(paths[1], index=False)
     _mlp_summary(per_seed, classical).to_csv(paths[2], index=False)
     return paths
