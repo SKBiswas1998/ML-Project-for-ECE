@@ -15,6 +15,7 @@ import pandas as pd
 
 from wte2ml.config import load_config, repo_path
 from wte2ml.data import load_dataset
+from wte2ml.splits import Split, all_protocols, blocked_cv_folds
 from wte2ml.targets import curve_targets
 
 
@@ -34,7 +35,31 @@ def step_targets(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
     return paths
 
 
-STEPS = {"targets": step_targets}
+def _describe(split: Split, protocol: str) -> dict[str, Any]:
+    """One summary row: sizes and T / vacancy ranges of both sides of a split."""
+    row: dict[str, Any] = {"protocol": protocol, "split": split.name}
+    for side in ("train", "test"):
+        k = getattr(split, side)
+        levels = sorted(k["vac_pct"].round(1).unique())
+        row |= {f"{side}_curves": len(k), f"{side}_T_K": f"{k.T_K.min()}-{k.T_K.max()}",
+                f"{side}_vac_pct": " ".join(f"{v:g}" for v in levels)}
+    return row
+
+
+def step_splits(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
+    """Every final split and every CV fold inside its training pool, as one table."""
+    ds = load_dataset(cfg)
+    curves = curve_targets(ds.metrics_pooled(), ds.iv_pooled(), cfg)
+    rows = []
+    for split in all_protocols(curves, cfg):
+        rows.append(_describe(split, split.name))
+        rows += [_describe(f, split.name) for f in blocked_cv_folds(split.train, cfg)]
+    path = out_dir / "split_summary.csv"
+    pd.DataFrame(rows).to_csv(path, index=False)
+    return [path]
+
+
+STEPS = {"targets": step_targets, "splits": step_splits}
 
 
 def main() -> None:
