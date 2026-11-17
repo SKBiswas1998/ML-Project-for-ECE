@@ -1,0 +1,40 @@
+# Single source of every constant used by the pipeline.
+# Paths are relative to the repository root (the folder that holds python/).
+
+paths:
+  data_dir: ML_edge_vacancy_seed2026   # NEGF output, read-only
+  results_dir: results                 # experiment CSVs (input to make_figures.py)
+  figures_dir: figures
+  cache_dir: results/cache             # intermediate fits, makes long runs resumable
+
+data:
+  iv_train: ML_IV_train.csv            # one row per gate point
+  iv_test: ML_IV_test.csv
+  metrics_train: ML_metrics_train.csv  # one row per curve (gate sweep)
+  metrics_test: ML_metrics_test.csv
+  negf_all: NEGF_all.mat               # layout info (vac_atoms, nested), scipy.io.loadmat
+  curve_key: [T_K, vac_pct]            # identifies one gate sweep
+  gate_column: VTG_minus_VBG_V         # lambda_eV and Ez_V_per_A are linear copies of it
+  points_per_curve: 20                 # gate points per sweep, verified in Stage 0
+  expected_rows:                       # verified in Stage 0; loader fails loudly if they change
+    iv_train: 12760
+    iv_test: 3200
+    metrics_train: 638
+    metrics_test: 160
+  expected_seed: 2026                  # single random vacancy layout
+  gate_grid_tolerance_V: 1.0e-9        # gate values of all curves must agree to this
+
+physics:
+  k_B_eV_per_K: 8.617333262e-5         # Boltzmann constant (CODATA 2018)
+  V_DS_V: 0.05                         # drain bias (NEGF_all.mat: Vds); SPD = V_DS * Ioff
+  dynamic_power: DED_over_tau          # P_dyn = DED_J / tau_d_s (the ONE convention)
+
+targets:
+  ioff_primary: last                   # 'last' = supplied Ioff (I at V = 1.9 V); 'min' = curve minimum
+  ioff_secondary: min                  # reported alongside the primary
+
+compute:
+  device: cpu                          # never assume CUDA
+  torch_threads: 4
+  n_jobs: 4
+  num_workers: 0                       # DataLoader workers; 0 is required on Windows
