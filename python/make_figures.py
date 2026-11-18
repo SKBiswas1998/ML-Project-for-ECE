@@ -10,6 +10,7 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from scipy.interpolate import PchipInterpolator
 
 from wte2ml.config import load_config, repo_path
@@ -65,12 +66,61 @@ def figure_swing_check(cfg: dict[str, Any], out_dir: Path) -> Path:
     return path
 
 
+def _plot_variance(ax, ev: pd.DataFrame) -> None:
+    """Bars: share of variance per component; line: cumulative share."""
+    ax.bar(ev.component, ev.explained_variance_ratio, color="C0", label="per component")
+    ax.plot(ev.component, ev.cumulative, "o-", color="C3", ms=3, label="cumulative")
+    ax.set(xlabel="principal component", ylabel="share of variance", ylim=(0, 1.02),
+           title="(a) PCA of log10 I-V curves")
+    ax.legend(fontsize=7)
+
+
+def _plot_loadings(ax, comps: pd.DataFrame) -> None:
+    """What PC1 and PC2 add to the mean curve, per gate voltage."""
+    for c, style in ((1, "-"), (2, "--")):
+        sub = comps[comps.component == c]
+        ax.plot(sub.gate_V, sub.loading, style, label=f"PC{c} loading")
+    ax.axhline(0, color="0.7", lw=0.8)
+    ax.set(xlabel="V_TG - V_BG (V)", ylabel="loading (decades per unit score)",
+           title="(b) component shapes")
+    ax.legend(fontsize=7)
+
+
+def _plot_clusters(ax, assign: pd.DataFrame, column: str, class_names: list[str]) -> None:
+    """PC1-PC2 scores coloured by cluster, marker by Ion/Ioff class."""
+    markers = dict(zip(class_names, ("x", "o", "^")))
+    for cls, m in markers.items():
+        sub = assign[assign.ion_ioff_class == cls]
+        ax.scatter(sub.PC1, sub.PC2, c=sub[column], cmap="viridis", vmin=0,
+                   vmax=assign[column].max(), marker=m, s=14, lw=0.8, label=cls)
+    ax.set(xlabel="PC1 score", ylabel="PC2 score", title=f"(c) {column} (colour) vs Ion/Ioff class (marker)")
+    leg = ax.legend(fontsize=7, title="log10 Ion/Ioff class", title_fontsize=7)
+    for handle in leg.legend_handles:    # marker shape = class; colour belongs to the clusters
+        handle.set_color("0.35")
+
+
+def figure_pca_clusters(cfg: dict[str, Any], out_dir: Path, column: str = "kmeans_k3") -> Path:
+    """Three panels from results/pca_*.csv and cluster_assignments.csv (Stage 6)."""
+    res = repo_path(cfg, "results_dir")
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.2))
+    _plot_variance(axes[0], pd.read_csv(res / "pca_explained_variance.csv"))
+    _plot_loadings(axes[1], pd.read_csv(res / "pca_components.csv"))
+    _plot_clusters(axes[2], pd.read_csv(res / "cluster_assignments.csv"), column,
+                   cfg["unsupervised"]["class_names"])
+    fig.tight_layout()
+    path = out_dir / "pca_clusters.png"
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
 def main() -> None:
     plt.switch_backend("Agg")   # file output only, no window
     cfg = load_config()
     out_dir = repo_path(cfg, "figures_dir")
     out_dir.mkdir(parents=True, exist_ok=True)
     print(figure_swing_check(cfg, out_dir))
+    print(figure_pca_clusters(cfg, out_dir))
 
 
 if __name__ == "__main__":

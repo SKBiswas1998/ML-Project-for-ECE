@@ -26,6 +26,15 @@ from wte2ml.evaluate import regression_metrics, skill_score
 from wte2ml.models import MODELS, NAIVE_MODELS, build_model, features, tune_and_fit
 from wte2ml.splits import Split, all_protocols, blocked_cv_folds, fold_indices
 from wte2ml.targets import curve_targets
+from wte2ml.unsupervised import (
+    cluster,
+    cluster_scores,
+    component_table,
+    explained_variance_table,
+    fit_pca,
+    ion_ioff_classes,
+    n_components_for,
+)
 
 
 def step_targets(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
@@ -310,7 +319,40 @@ def step_mlp(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
     return paths
 
 
-STEPS = {"targets": step_targets, "splits": step_splits, "classical": step_classical, "mlp": step_mlp}
+def _pca_inputs(cfg: dict[str, Any]) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+    """(curve table aligned to the curve matrix, gate grid, (798, 20) log10_I matrix)."""
+    ds = load_dataset(cfg)
+    keys, gate_V, Y = curve_matrix(ds.iv_pooled(), cfg)
+    curves = curve_targets(ds.metrics_pooled(), ds.iv_pooled(), cfg)
+    aligned = keys.merge(curves, on=["T_K", "vac_pct"], how="left", validate="one_to_one")
+    return aligned, gate_V, Y
+
+
+def step_unsupervised(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
+    """PCA of the I-V curves and k-means / Gaussian-mixture clustering of the devices."""
+    u, seed = cfg["unsupervised"], cfg["models"]["seed"]
+    curves, gate_V, Y = _pca_inputs(cfg)
+    pca = fit_pca(Y, u["pca_max_components"])
+    n_keep = n_components_for(pca, u["cluster_variance_kept"])
+    Z = pca.transform(Y)[:, :n_keep]
+    classes = ion_ioff_classes(curves["log10_Ion_Ioff"], u["ion_ioff_class_edges"])
+    scores = cluster_scores(Z, classes, u, seed).assign(n_pcs_used=n_keep)
+    assign = curves[["T_K", "vac_pct", "log10_Ion_Ioff"]].assign(
+        PC1=Z[:, 0], PC2=Z[:, 1], ion_ioff_class=np.array(u["class_names"])[classes])
+    for method in ("kmeans", "gmm"):
+        for k in u["k_range"]:
+            assign[f"{method}_k{k}"] = cluster(Z, method, k, u, seed)[0]
+    paths = [out_dir / n for n in ("pca_explained_variance.csv", "pca_components.csv",
+                                   "cluster_scores.csv", "cluster_assignments.csv")]
+    explained_variance_table(pca).to_csv(paths[0], index=False)
+    component_table(pca, gate_V).to_csv(paths[1], index=False)
+    scores.to_csv(paths[2], index=False)
+    assign.to_csv(paths[3], index=False)
+    return paths
+
+
+STEPS = {"targets": step_targets, "splits": step_splits, "classical": step_classical,
+         "mlp": step_mlp, "unsupervised": step_unsupervised}
 
 
 def main() -> None:
