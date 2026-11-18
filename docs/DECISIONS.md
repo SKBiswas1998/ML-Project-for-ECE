@@ -71,3 +71,18 @@ Stage 3 questions were unanswered, so the defaults apply: no final-split embargo
 - **Compute budget EXCEEDED.** The MLP step took about 3,890 s of fitting in total (sum of `fit_seconds` in `results/metrics_mlp.csv`), of which log10_I took about 3,025 s. With the classical step (1,132 s) the full run is about 84 min against the "well under an hour" target. Fix options are in the Stage 5 review; nothing has been changed yet.
 - **Memory:** the first MLP run was stopped by the system for low memory with 4 parallel fits. `compute.n_jobs` is now 2. Speed only, not results; not part of the cache key.
 - **Early stopping cap:** 4 of the 80 seed fits stopped at the 1,500-epoch limit rather than by patience (`best_epochs` in `results/metrics_mlp.csv`), all on curve-level supplied-split tasks.
+
+## 2026-11-18 — Notebook for Colab / Kaggle (requested before Stage 6)
+
+- **`notebooks/WTe2_TIFET_pipeline.ipynb`** clones the public repository (branch `test_1`), installs only pyyaml, pytest and scikit-learn ≥ 1.5 (the platforms already ship numpy, pandas, scipy, torch and matplotlib), and calls package functions only. Every cell has a heading naming the question it answers.
+- **The slow model runs are off by default** (`RERUN_CLASSICAL`, `RERUN_MLP`). The notebook reads the committed results so it finishes in about 2 min. *Rejected:* always re-running, which would take about 85 min and could hit Colab's idle timeout.
+- **Verified** by executing the notebook in an empty folder, cloning from GitHub: all cells ran, 50 tests passed, and the outputs match `results/*.csv`. Total time was 96 s locally (scratch run).
+- The notebook needs no torch reinstall. On a GPU runtime it still runs on CPU (`compute.device: cpu`).
+
+## 2026-11-18 — Stage 5 revision: curve-output MLP for log10_I (your choice A)
+
+- **log10_I MLP = one row per curve:** input (T_K, vac_pct), 20 outputs (the curve's log10 I at each gate). That is 638 training rows instead of 12,760, and matches the per-gate GP. Predictions are flattened back to (curve, gate) rows, so scoring is identical to the other models; `tests/test_runner.py` checks the alignment row by row. The `point_grid_override` (weight decay fixed for log10_I) is removed, so log10_I gets the full 8-config grid again.
+- **Run time:** the MLP step took 2,017 s fresh (was about 3,890 s). The log10_I jobs took 732 s, against about 3,025 s before (`fit_seconds` in `results/metrics_mlp.csv`). Full fresh pipeline is about 53 min (classical 1,132 s + MLP 2,017 s).
+- **Reproducible:** all 12 curve-level MLP jobs gave exactly the same MAE as the previous run (seeded, one torch thread per fit).
+- **Accuracy trade-off for log10_I** (`results/mlp_vs_classical.csv`): supplied 0.157 ± 0.006 (per-point MLP was 0.030), temperature_forward 0.188 ± 0.054 (was 0.078), vacancy_block 1.008 ± 0.085 (was 0.983), vacancy_extrapolation 0.924 ± 0.288 (was 1.572 ± 0.800). The overall conclusion is unchanged: the MLP beats the classical models only on curve-level vacancy extrapolation.
+- **Open:** on the supplied split all 5 seed fits stopped at or near the 1,500-epoch cap (best epochs 1330–1490), so the curve-output MLP is under-trained there (about 2 updates per epoch instead of about 20).

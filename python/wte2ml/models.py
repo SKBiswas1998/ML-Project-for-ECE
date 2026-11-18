@@ -154,17 +154,16 @@ def _joint_model(name: str, cfg: dict[str, Any]) -> tuple[Any, dict[str, list]]:
     raise ValueError(name)
 
 
-def _mlp_model(cfg: dict[str, Any], pointwise: bool) -> tuple[Any, dict[str, list]]:
-    """PyTorch MLP on all columns of X; width, depth and weight decay tuned by blocked CV.
-    For log10_I (pointwise) ``point_grid_override`` replaces grid entries to fit the budget."""
+def _mlp_model(cfg: dict[str, Any]) -> tuple[Any, dict[str, list]]:
+    """PyTorch MLP; width, depth and weight decay tuned by blocked CV. For log10_I the
+    MLP step feeds it one row per curve with 20 outputs (see run_experiments)."""
     m, c = cfg["models"]["mlp"], cfg["compute"]
     est = MLPRegressor(dropout=m["dropout"], learning_rate=m["learning_rate"],
                        max_epochs=m["max_epochs"], patience=m["patience"],
                        eval_every=m["eval_every"], batch_size=m["batch_size"],
                        early_stop_fraction=m["early_stop_fraction"], seed=m["seeds"][0],
                        device=c["device"], threads=c["torch_threads"])
-    grid = {"width": m["width"], "depth": m["depth"], "weight_decay": m["weight_decay"]}
-    return est, grid | (m["point_grid_override"] if pointwise else {})
+    return est, {"width": m["width"], "depth": m["depth"], "weight_decay": m["weight_decay"]}
 
 
 def build_model(name: str, cfg: dict[str, Any], pointwise: bool) -> tuple[Any, dict[str, list]]:
@@ -176,7 +175,7 @@ def build_model(name: str, cfg: dict[str, Any], pointwise: bool) -> tuple[Any, d
     if name in ("ridge", "poly_ridge", "boosting"):
         return _joint_model(name, cfg)
     if name == "mlp":
-        return _mlp_model(cfg, pointwise)
+        return _mlp_model(cfg)
     est, grid = _curve_model(name, cfg)
     if not pointwise:
         return est, grid

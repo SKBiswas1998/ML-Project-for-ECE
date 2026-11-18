@@ -21,7 +21,7 @@ from joblib import Parallel, delayed
 from sklearn.base import clone
 
 from wte2ml.config import load_config, repo_path
-from wte2ml.data import load_dataset
+from wte2ml.data import curve_matrix, load_dataset
 from wte2ml.evaluate import regression_metrics, skill_score
 from wte2ml.models import MODELS, NAIVE_MODELS, build_model, features, tune_and_fit
 from wte2ml.splits import Split, all_protocols, blocked_cv_folds, fold_indices
@@ -69,7 +69,7 @@ def step_splits(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
 
 
 GZIP = {"method": "gzip", "mtime": 0}   # fixed timestamp: identical results give identical files in git
-MLP_KEYS = ("mlp", "mlp_targets", "mlp_vacancy_feature")   # config keys only the MLP step uses
+MLP_KEYS = ("mlp", "mlp_targets", "mlp_vacancy_feature", "mlp_iv_mode")   # config keys only the MLP step uses
 
 
 def _config_hash(cfg: dict[str, Any], step: str) -> str:
@@ -185,15 +185,53 @@ def step_classical(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
 def _fit_seed(best: Any, seed: int, d: dict[str, Any]) -> tuple[np.ndarray, int]:
     """Refit the tuned MLP with one initialisation seed; return test predictions, best epoch."""
     model = clone(best).set_params(seed=seed).fit(d["X_train"], d["y_train"])
-    return model.predict(d["X_test"]), model.best_epoch_
+    return np.ravel(model.predict(d["X_test"])), model.best_epoch_   # (n,20) curves -> rows
+
+
+def _curve_features(keys: pd.DataFrame, per_curve: pd.DataFrame, feature: str) -> np.ndarray:
+    """(n_curves, 2) X = [T_K, vacancy feature] for curve keys, in the order of ``keys``."""
+    return features(keys.merge(per_curve, on=["T_K", "vac_pct"], how="left", validate="one_to_one"),
+                    feature, None)
+
+
+def _curve_output_data(cfg: dict[str, Any], split: Split, iv: pd.DataFrame, feature: str
+                       ) -> dict[str, Any]:
+    """log10_I as one row per curve: X = (T_K, vacancy), y = the curve's 20 log10_I values.
+
+    Same keys as ``_task_data``; ``y_test`` and ``test_keys`` are flattened back to one row
+    per (curve, gate) in curve-major order, so scoring matches the per-point models exactly.
+    """
+    train, test = (t.reset_index(drop=True) for t in split.apply(iv))
+    cols = list(dict.fromkeys(["T_K", "vac_pct", feature]))   # feature may itself be vac_pct
+    per_curve = iv[cols].drop_duplicates(["T_K", "vac_pct"])
+    tr_keys, _, Y_train = curve_matrix(train, cfg, cfg["experiments"]["point_target"])
+    te_keys, gate_V, Y_test = curve_matrix(test, cfg, cfg["experiments"]["point_target"])
+    n_gate = len(gate_V)
+    keys = pd.DataFrame({"T_K": np.repeat(te_keys["T_K"].to_numpy(), n_gate),
+                         "vac_pct": np.repeat(te_keys["vac_pct"].to_numpy(), n_gate),
+                         "gate_V": np.tile(gate_V, len(te_keys))})
+    return {"gate": None, "X_train": _curve_features(tr_keys, per_curve, feature), "y_train": Y_train,
+            "X_test": _curve_features(te_keys, per_curve, feature), "y_test": Y_test.ravel(),
+            "cv": fold_indices(tr_keys, blocked_cv_folds(tr_keys, cfg)), "test_keys": keys}
+
+
+def _mlp_task_data(cfg: dict[str, Any], split: Split, table: pd.DataFrame, target: str
+                   ) -> dict[str, Any]:
+    """Curve-output layout for log10_I (``experiments.mlp_iv_mode``), the usual one otherwise."""
+    feature = cfg["experiments"]["mlp_vacancy_feature"]
+    if target == cfg["experiments"]["point_target"]:
+        if cfg["experiments"]["mlp_iv_mode"] != "curve_output":
+            raise ValueError(f"unknown mlp_iv_mode {cfg['experiments']['mlp_iv_mode']!r}")
+        return _curve_output_data(cfg, split, table, feature)
+    return _task_data(cfg, split, table, feature, target)
 
 
 def run_mlp_job(cfg: dict[str, Any], split: Split, table: pd.DataFrame, target: str
                 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Tune the MLP by blocked CV with the first seed, then refit with every seed in
     ``models.mlp.seeds`` (in parallel). Returns predictions (one block per seed) and metadata."""
-    d = _task_data(cfg, split, table, cfg["experiments"]["mlp_vacancy_feature"], target)
-    est, grid = build_model("mlp", cfg, pointwise=d["gate"] is not None)
+    d = _mlp_task_data(cfg, split, table, target)
+    est, grid = build_model("mlp", cfg, pointwise=False)
     t0 = time.perf_counter()
     best, params, cv_mse = tune_and_fit(est, grid, d["X_train"], d["y_train"], d["cv"], cfg)
     seeds = cfg["models"]["mlp"]["seeds"]
