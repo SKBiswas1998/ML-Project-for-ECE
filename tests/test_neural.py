@@ -37,3 +37,13 @@ def test_learns_smooth_function():
     X, y = _data()
     p = MLPRegressor(**FAST).fit(X, y).predict(X)
     assert np.mean(np.abs(p - y)) < 0.1 * np.std(y)
+
+
+def test_multi_output_predicts_whole_curve():
+    """One row per curve, 5 outputs (the gate points): prediction shape and accuracy."""
+    X, y = _data()
+    Xc, Yc = X[::5, :2], y.reshape(-1, 5)          # 36 curves x 5 gate points
+    m = MLPRegressor(**FAST).fit(Xc, Yc)
+    P = m.predict(Xc)
+    assert P.shape == (36, 5)
+    assert np.mean(np.abs(P - Yc)) < 0.1 * np.std(Yc)

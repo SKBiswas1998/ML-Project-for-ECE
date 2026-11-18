@@ -60,6 +60,7 @@ experiments:
   cv_scoring: neg_mean_squared_error
   mlp_targets: [log10_I, log10_Ion_Ioff, log10_Ion_Ioff_min, swing_mV_per_dec]  # SPD = Ion/Ioff copy; P_dyn, DED, tau ~constant
   mlp_vacancy_feature: vac_pct         # Stage 4: encoding made no difference (median MAE ratio 1.0)
+  mlp_iv_mode: curve_output           # log10_I: input (T, vac) -> 20 outputs per curve (638 rows, not 12,760)
 
 models:
   ridge:
@@ -89,8 +90,6 @@ models:
     batch_size: 512                    # rows per Adam step; tasks with fewer rows train full-batch
     early_stop_fraction: 0.15          # share of training CURVES held out for early stopping
     seeds: [0, 1, 2, 3, 4]             # initialisation seeds; tuning uses the first
-    point_grid_override:               # log10_I (12,760 rows, ~50 s per fit): smaller grid to fit the budget
-      weight_decay: [1.0e-4]
   seed: 0                              # random_state for every stochastic sklearn model
 
 compute:

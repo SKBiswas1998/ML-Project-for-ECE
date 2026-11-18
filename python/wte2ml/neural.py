@@ -15,13 +15,13 @@ from sklearn.base import BaseEstimator, RegressorMixin
 from torch import nn
 
 
-def build_network(n_in: int, width: int, depth: int, dropout: float) -> nn.Sequential:
-    """depth x [Linear(width) -> SiLU -> Dropout], then Linear(1). SiLU is smooth, so
-    predicted I-V curves have no kinks from ReLU corners."""
+def build_network(n_in: int, n_out: int, width: int, depth: int, dropout: float) -> nn.Sequential:
+    """depth x [Linear(width) -> SiLU -> Dropout], then Linear(n_out). SiLU is smooth, so
+    predictions have no kinks from ReLU corners. n_out = 20 predicts a whole I-V curve."""
     layers: list[nn.Module] = []
     for i in range(depth):
         layers += [nn.Linear(n_in if i == 0 else width, width), nn.SiLU(), nn.Dropout(dropout)]
-    return nn.Sequential(*layers, nn.Linear(width, 1))
+    return nn.Sequential(*layers, nn.Linear(width, n_out))
 
 
 def curve_holdout_mask(X: np.ndarray, fraction: float, rng: np.random.Generator) -> np.ndarray:
@@ -51,15 +51,18 @@ class MLPRegressor(RegressorMixin, BaseEstimator):
         return torch.as_tensor(a, dtype=torch.float32, device=self.device)
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> MLPRegressor:
-        """X: (n, n_features) raw inputs; y: (n,) target. Returns self (best-epoch weights)."""
+        """X: (n, n_features) raw inputs; y: (n,) one target or (n, k) k targets per row
+        (e.g. the 20 gate points of a curve). Returns self (best-epoch weights)."""
         torch.set_num_threads(self.threads)
         torch.manual_seed(self.seed)
         X, y = np.asarray(X, float), np.asarray(y, float)
+        self.single_output_ = y.ndim == 1
+        y = y.reshape(len(y), -1)
         self.x_mean_, self.x_std_ = X.mean(0), X.std(0) + 1e-12
-        self.y_mean_, self.y_std_ = y.mean(), y.std() + 1e-12
+        self.y_mean_, self.y_std_ = y.mean(0), y.std(0) + 1e-12   # per output column
         val = curve_holdout_mask(X, self.early_stop_fraction, np.random.default_rng(self.seed))
         Xs, ys = self._tensor((X - self.x_mean_) / self.x_std_), self._tensor((y - self.y_mean_) / self.y_std_)
-        self.net_ = build_network(X.shape[1], self.width, self.depth, self.dropout).to(self.device)
+        self.net_ = build_network(X.shape[1], y.shape[1], self.width, self.depth, self.dropout).to(self.device)
         self.best_epoch_, self.best_val_mse_ = self._train(Xs[~val], ys[~val], Xs[val], ys[val])
         return self
 
@@ -68,7 +71,7 @@ class MLPRegressor(RegressorMixin, BaseEstimator):
         self.net_.train()
         for idx in torch.randperm(len(yt), generator=gen).split(self.batch_size):
             opt.zero_grad()
-            loss_fn(self.net_(Xt[idx]).squeeze(1), yt[idx]).backward()
+            loss_fn(self.net_(Xt[idx]), yt[idx]).backward()
             opt.step()
 
     def _train(self, Xt, yt, Xv, yv) -> tuple[int, float]:
@@ -83,7 +86,7 @@ class MLPRegressor(RegressorMixin, BaseEstimator):
                 continue
             self.net_.eval()
             with torch.no_grad():
-                v = loss_fn(self.net_(Xv).squeeze(1), yv).item()
+                v = loss_fn(self.net_(Xv), yv).item()
             if v < best:
                 best, best_epoch, state = v, epoch, copy.deepcopy(self.net_.state_dict())
             elif epoch - best_epoch >= self.patience:
@@ -92,8 +95,9 @@ class MLPRegressor(RegressorMixin, BaseEstimator):
         return best_epoch, best
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        """(n,) predictions in the target's original units."""
+        """(n,) or (n, k) predictions (same shape as the fitted y) in original units."""
         self.net_.eval()
         with torch.no_grad():
             z = self.net_(self._tensor((np.asarray(X, float) - self.x_mean_) / self.x_std_))
-        return z.squeeze(1).cpu().numpy() * self.y_std_ + self.y_mean_
+        out = z.cpu().numpy() * self.y_std_ + self.y_mean_
+        return out[:, 0] if self.single_output_ else out
