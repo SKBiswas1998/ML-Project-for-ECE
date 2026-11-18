@@ -106,3 +106,19 @@ $$ \widehat{\mathrm{Err}}(\theta) = \frac{1}{K}\sum_{k=1}^{K} \frac{1}{|B_k|}\su
 **Equation (one hidden layer shown; we use 2–3).** $\hat y(x) = w_2^\top\, \sigma(W_1 x + b_1) + b_2,\quad \min_\theta \tfrac1n\sum_i (y_i - \hat y(x_i))^2 + \lambda\lVert\theta\rVert^2$
 **Why here.** One network can represent a whole I–V curve, including the sharp drop, without fixing its shape in advance. For log10 I it maps (T, vacancy) to all 20 gate points at once (638 rows, not 12,760), which keeps training cheap on a CPU.
 **Failure mode here.** Only 798 curves from one nested layout: the network can memorise layout-specific bumps it cannot generalise. Results also depend on the random initialisation, so we report the mean ± std over 5 seeds. With dropout 0 and noiseless data, early stopping and weight decay are the only regularisers.
+
+## Modules added in Stage 6
+
+**unsupervised.py** fits a PCA of the 798 log10 I–V curves (`fit_pca`, `explained_variance_table`, `component_table`) and clusters the curves in the space of the leading PCA scores (`cluster`, `cluster_scores`). It compares the clusters with a physics label: three log10 Ion/Ioff classes from `ion_ioff_classes`. It is descriptive only. It is fitted on all 798 curves, never feeds a prediction, and so does not touch the train/test protocols. `run_experiments.py unsupervised` writes `results/pca_explained_variance.csv`, `pca_components.csv`, `cluster_scores.csv` and `cluster_assignments.csv`. `make_figures.py` draws `figures/pca_clusters.png` from them.
+
+## Technique: principal component analysis (unsupervised learning: dimensionality reduction)
+**Idea.** Each I–V curve is a point in a 20-dimensional space (one axis per gate voltage). PCA finds the directions along which the curves differ most. The first component is the single curve shape that, added to the mean curve in varying amounts, explains the most variation, and so on. If a few components explain almost everything, the curves really have only a few degrees of freedom.
+**Equation.** Centred data $\tilde Y = Y - \bar y$, with $\tilde Y = U S V^\top$ (SVD). Components are the rows of $V^\top$, scores $Z = \tilde Y V$, and explained-variance share $s_j^2 / \sum_i s_i^2$.
+**Why here.** All 20 columns share one unit (decades), so no rescaling is needed, and the components can be read physically as curve shapes over gate voltage.
+**Failure mode here.** PCA is linear. A sharp drop that moves along the gate axis from device to device needs several components to describe, so "PCs needed" overstates how complex the physics is. It is also fitted on all curves, so it describes this dataset rather than predicting new devices.
+
+## Technique: k-means and Gaussian-mixture clustering (unsupervised learning: clustering)
+**Idea.** *k-means* puts k centres in the PCA-score space and assigns each curve to the nearest one, moving each centre to the mean of its curves until nothing changes. A *Gaussian mixture* models the points as k overlapping Gaussian clouds, each with its own shape (full covariance), fitted by expectation–maximisation. We judge the result by the *silhouette* (how much closer each curve is to its own cluster than to the next) and by the *adjusted Rand index* against the Ion/Ioff classes.
+**Equation (k-means objective; silhouette of point i).** $\min_{\{C_j\},\{\mu_j\}} \sum_j \sum_{i \in C_j} \lVert z_i - \mu_j \rVert^2, \qquad s_i = \frac{b_i - a_i}{\max(a_i, b_i)}$ ($a_i$: mean distance to its own cluster, $b_i$: to the nearest other cluster).
+**Why here.** It asks whether the devices fall into natural groups (working, degraded, failed) without being told the labels.
+**Failure mode here.** The data are not blobs. Each vacancy level traces a thin *strand* through PCA space as temperature changes, so the clusters cut the set of strands into bands of vacancy levels. The silhouette is then middling and nearly flat in k, and BIC keeps falling as k grows (noiseless data, no natural k).

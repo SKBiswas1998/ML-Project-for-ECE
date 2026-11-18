@@ -98,3 +98,13 @@ Stage 3 questions were unanswered, so the defaults apply: no final-split embargo
   - vacancy_extrapolation 0.924 ± 0.288 → **0.917 ± 0.289** (essentially unchanged, not worse on average). Per seed (`results/metrics_mlp.csv`): seed 0 got slightly worse (0.900 → 0.909), seeds 2 and 4 slightly better (0.902 → 0.867, 0.546 → 0.543), seeds 1 and 3 almost unchanged. Blocked CV now picks weight decay 0 instead of 1e-4 for this job.
 - **The conclusion still holds:** the GP (0.001, 0.019) and boosting (0.650, 0.480) remain better than the MLP for log10_I on every protocol.
 - **Run time:** the 4 log10_I jobs took 901 s (was 732 s). A fresh MLP step is 2,163 s (901 I–V + 1,262 curve-level, sum of `fit_seconds`). With the classical step (1,132 s) a fresh full run is about 3,295 s ≈ **55 min**. That is under the one-hour budget, with little margin.
+
+## 2026-11-18 — Stage 6 (PCA and clustering)
+
+Defaults kept for the four open questions (none affects this stage).
+- **PCA on the (798, 20) log10_I matrix, centred, not scaled.** Every column is in decades, so scaling would inflate the flat on-state columns (V < 0.8 V), which carry almost no variance. Fitted on all 798 curves: descriptive only, so no split is involved.
+- **Cluster on the first 6 PCs** (fewest reaching 99 % of variance, `cluster_variance_kept`). *Rejected:* clustering the raw 20 columns, which is dominated by the same directions but noisier; and 2 PCs only (91 %), which would cluster the picture rather than the data.
+- **Ion/Ioff classes for comparison:** < 4 failed, 4–9 degraded, ≥ 9 working (supplied log10 Ion/Ioff). The 9-decade edge sits in an empty gap of the histogram (13 of 798 curves between 9 and 11). The 4-decade edge is a convention we chose, not a property of the data. Class sizes: 190 failed, 552 degraded, 56 working (`results/cluster_assignments.csv`).
+- **Methods:** k-means and a full-covariance Gaussian mixture, k = 2–6, 10 restarts, seed 0.
+- **Bug caught by a test:** `n_components_for` returned one component too many when the requested share was never reached. It is fixed. Our results were unaffected (99 % is reached at 6 of 10 components).
+- **Finding (checked numerically, not only by eye):** the clusters are bands of vacancy levels. With k = 3, k-means keeps 19 of 21 levels entirely in one cluster (0.3 % and 1.3 % are split by temperature), and the Gaussian mixture keeps 20 of 21 (1.3 % split). Scratch check from `results/cluster_assignments.csv`.

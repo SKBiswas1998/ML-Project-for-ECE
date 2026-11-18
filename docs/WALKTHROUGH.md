@@ -42,3 +42,9 @@ We trained a small MLP (2–3 layers, 64–128 units) with 5 random seeds. Numbe
 - **Seeds matter.** The spread across seeds is large for extrapolation (see the per-seed rows in `results/metrics_mlp.csv`).
 
 The honest answer to "does the neural network beat simpler models?" is mostly no. It is the best model only when extrapolating the on/off ratio beyond the trained vacancy range, and even there it errs by about 1 decade.
+
+## Stage 6: are there natural groups of devices?
+We compressed every I–V curve with PCA and clustered the devices without telling the algorithm anything about vacancy or temperature. Numbers are from `results/pca_explained_variance.csv` and `results/cluster_scores.csv`.
+- **The curves are simple.** One component explains 83.7 % of the variation between curves, two explain 90.8 %, and six explain 99.4 %. PC1 measures how high the current stays above about 1 V, i.e. how leaky the off state is. PC2 captures the dip around 1.0–1.5 V and the rise after it (the upturn).
+- **The clusters are vacancy bands.** With three clusters, k-means and a Gaussian mixture both find roughly clean (about 0–0.3 %), intermediate (about 0.3–1.3 %) and heavily damaged (about 1.3–2.0 %) devices, and keep almost every vacancy level whole. They match our on/off-ratio classes only moderately (adjusted Rand index 0.42 for k-means, 0.45 for the mixture). All 190 "failed" curves fall in the damaged cluster, but so do about 100 "degraded" ones.
+- **There is no natural number of groups.** The silhouette stays between 0.47 and 0.52 for 2–6 clusters. In the PCA plot (`figures/pca_clusters.png`) each vacancy level is a thin strand traced out by temperature, so the algorithms are dividing strands, not separating blobs. The vacancy layout, not the temperature, determines which family a device belongs to.
