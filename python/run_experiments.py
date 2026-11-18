@@ -69,7 +69,10 @@ def step_splits(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
 
 
 GZIP = {"method": "gzip", "mtime": 0}   # fixed timestamp: identical results give identical files in git
-MLP_KEYS = ("mlp", "mlp_targets", "mlp_vacancy_feature", "mlp_iv_mode")   # config keys only the MLP step uses
+# config keys only the MLP step uses
+MLP_KEYS = ("mlp", "mlp_targets", "mlp_vacancy_feature", "mlp_iv_mode", "mlp_iv_max_epochs")
+# keys that change only the log10_I MLP jobs: left out of the MLP hash, put in those jobs' file names
+IV_ONLY_KEYS = ("mlp_iv_max_epochs",)
 
 
 def _config_hash(cfg: dict[str, Any], step: str) -> str:
@@ -79,6 +82,8 @@ def _config_hash(cfg: dict[str, Any], step: str) -> str:
     adding or tuning the MLP does not invalidate the 19-minute classical cache.
     """
     parts = {k: cfg[k] for k in ("data", "targets", "splits", "inputs", "experiments", "models")}
+    if step == "mlp":
+        parts["experiments"] = {k: v for k, v in parts["experiments"].items() if k not in IV_ONLY_KEYS}
     if step == "classical":
         parts = {k: ({kk: vv for kk, vv in v.items() if kk not in MLP_KEYS} if isinstance(v, dict) else v)
                  for k, v in parts.items()}
@@ -126,11 +131,12 @@ def _task_data(cfg: dict[str, Any], split: Split, table: pd.DataFrame, feature: 
     }
 
 
-def _cached(cache: Path, job: dict[str, str], compute: Callable[[], tuple[pd.DataFrame, dict]]
-            ) -> tuple[pd.DataFrame, dict[str, Any]]:
+def _cached(cache: Path, job: dict[str, str], compute: Callable[[], tuple[pd.DataFrame, dict]],
+            tag: str = "") -> tuple[pd.DataFrame, dict[str, Any]]:
     """Return a job's (predictions, metadata) from disk, or run ``compute`` and store it.
-    Makes long runs resumable: an interrupted run skips every finished job."""
-    path = cache / ("__".join(job.values()) + ".pkl")
+    Makes long runs resumable: an interrupted run skips every finished job. ``tag`` adds
+    job-specific settings to the file name (e.g. the log10_I epoch limit)."""
+    path = cache / ("__".join([*job.values(), *([tag] if tag else [])]) + ".pkl")
     if path.exists():
         return pd.read_pickle(path)
     pred, meta = compute()
@@ -185,7 +191,7 @@ def step_classical(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
 def _fit_seed(best: Any, seed: int, d: dict[str, Any]) -> tuple[np.ndarray, int]:
     """Refit the tuned MLP with one initialisation seed; return test predictions, best epoch."""
     model = clone(best).set_params(seed=seed).fit(d["X_train"], d["y_train"])
-    return np.ravel(model.predict(d["X_test"])), model.best_epoch_   # (n,20) curves -> rows
+    return np.ravel(model.predict(d["X_test"])), model.best_epoch_, model.stop_epoch_   # (n,20) -> rows
 
 
 def _curve_features(keys: pd.DataFrame, per_curve: pd.DataFrame, feature: str) -> np.ndarray:
@@ -226,20 +232,31 @@ def _mlp_task_data(cfg: dict[str, Any], split: Split, table: pd.DataFrame, targe
     return _task_data(cfg, split, table, feature, target)
 
 
+def _iv_tag(cfg: dict[str, Any], target: str) -> str:
+    """Cache-name tag for settings that apply to the log10_I MLP only ("" for other targets)."""
+    e = cfg["experiments"]
+    return f"maxep{e['mlp_iv_max_epochs']}" if target == e["point_target"] else ""
+
+
 def run_mlp_job(cfg: dict[str, Any], split: Split, table: pd.DataFrame, target: str
                 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Tune the MLP by blocked CV with the first seed, then refit with every seed in
     ``models.mlp.seeds`` (in parallel). Returns predictions (one block per seed) and metadata."""
     d = _mlp_task_data(cfg, split, table, target)
     est, grid = build_model("mlp", cfg, pointwise=False)
+    if target == cfg["experiments"]["point_target"]:
+        est.set_params(max_epochs=cfg["experiments"]["mlp_iv_max_epochs"])
     t0 = time.perf_counter()
     best, params, cv_mse = tune_and_fit(est, grid, d["X_train"], d["y_train"], d["cv"], cfg)
     seeds = cfg["models"]["mlp"]["seeds"]
     runs = Parallel(n_jobs=cfg["compute"]["n_jobs"])(delayed(_fit_seed)(best, s, d) for s in seeds)
     pred = pd.concat([d["test_keys"].assign(seed=s, y_true=d["y_test"], y_pred=p, y_std=np.nan)
-                      for s, (p, _) in zip(seeds, runs)], ignore_index=True)
+                      for s, (p, _, _) in zip(seeds, runs)], ignore_index=True)
     meta = {"cv_mse": cv_mse, "best_params": json.dumps({k: str(v) for k, v in params.items()}),
-            "best_epochs": json.dumps([int(e) for _, e in runs]),
+            "best_epochs": json.dumps([int(b) for _, b, _ in runs]),
+            "stop_epochs": json.dumps([int(st) for _, _, st in runs]),
+            "max_epochs": int(best.max_epochs),
+            "seeds_hit_epoch_cap": sum(int(st) == best.max_epochs - 1 for _, _, st in runs),
             "fit_seconds": round(time.perf_counter() - t0, 2)}
     return pred, meta
 
@@ -280,7 +297,8 @@ def step_mlp(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
         for target in cfg["experiments"]["mlp_targets"]:
             job = {"protocol": split.name, "feature": cfg["experiments"]["mlp_vacancy_feature"], "target": target}
             table = iv if target == cfg["experiments"]["point_target"] else curves
-            pred, meta = _cached(cache, job, partial(run_mlp_job, cfg, split, table, target))
+            pred, meta = _cached(cache, job, partial(run_mlp_job, cfg, split, table, target),
+                                 tag=_iv_tag(cfg, target))
             preds.append(pred)
             metas.append({**job, **meta})
     pred = pd.concat(preds, ignore_index=True)

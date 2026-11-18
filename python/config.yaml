@@ -61,6 +61,7 @@ experiments:
   mlp_targets: [log10_I, log10_Ion_Ioff, log10_Ion_Ioff_min, swing_mV_per_dec]  # SPD = Ion/Ioff copy; P_dyn, DED, tau ~constant
   mlp_vacancy_feature: vac_pct         # Stage 4: encoding made no difference (median MAE ratio 1.0)
   mlp_iv_mode: curve_output           # log10_I: input (T, vac) -> 20 outputs per curve (638 rows, not 12,760)
+  mlp_iv_max_epochs: 8000             # log10_I only: 1,500 was hit by every supplied-split seed; patience still decides
 
 models:
   ridge:
