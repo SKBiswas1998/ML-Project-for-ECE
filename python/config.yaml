@@ -93,6 +93,17 @@ models:
     seeds: [0, 1, 2, 3, 4]             # initialisation seeds; tuning uses the first
   seed: 0                              # random_state for every stochastic sklearn model
 
+unsupervised:                          # descriptive only: fitted on all 798 curves, never used to predict
+  pca_max_components: 10               # of 20 gate points
+  cluster_variance_kept: 0.99          # cluster on the fewest PCs explaining this share of variance
+  k_range: [2, 3, 4, 5, 6]
+  gmm_covariance: full
+  n_init: 10                           # restarts for k-means and the Gaussian mixture
+  ion_ioff_class_edges: [4.0, 9.0]     # log10 Ion/Ioff: < 4 failed, 4-9 degraded, >= 9 working.
+                                       # 9 = empty gap in the histogram (13 of 798 curves in 9-11);
+                                       # 4 = our choice of a minimum usable on/off ratio (a convention)
+  class_names: [failed, degraded, working]
+
 compute:
   device: cpu                          # never assume CUDA
   torch_threads: 1                     # per MLP fit; fits run in parallel instead (small nets scale poorly)
