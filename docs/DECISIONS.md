@@ -86,3 +86,15 @@ Stage 3 questions were unanswered, so the defaults apply: no final-split embargo
 - **Reproducible:** all 12 curve-level MLP jobs gave exactly the same MAE as the previous run (seeded, one torch thread per fit).
 - **Accuracy trade-off for log10_I** (`results/mlp_vs_classical.csv`): supplied 0.157 ± 0.006 (per-point MLP was 0.030), temperature_forward 0.188 ± 0.054 (was 0.078), vacancy_block 1.008 ± 0.085 (was 0.983), vacancy_extrapolation 0.924 ± 0.288 (was 1.572 ± 0.800). The overall conclusion is unchanged: the MLP beats the classical models only on curve-level vacancy extrapolation.
 - **Open:** on the supplied split all 5 seed fits stopped at or near the 1,500-epoch cap (best epochs 1330–1490), so the curve-output MLP is under-trained there (about 2 updates per epoch instead of about 20).
+
+## 2026-11-18 — Option 2: I–V MLP trained to early stopping (epoch limit 1,500 → 8,000)
+
+- **Setting:** `experiments.mlp_iv_max_epochs: 8000`, used only for the 4 log10_I MLP jobs. It is left out of the MLP cache hash (still 17f77466) and added to those jobs' cache file names (`maxep8000`), so the 12 curve-level MLP jobs were loaded from cache and are bit-identical (`changed = False` for all 12 in the comparison). The MLP now records `stop_epochs` (last epoch run) and `seeds_hit_epoch_cap` per job (`results/metrics_mlp.csv`).
+- **Every seed stopped by early stopping, none by the cap** (`seeds_hit_epoch_cap` = 0 for all 4 jobs). Last epoch run per seed (`stop_epochs`): supplied 1435, 1390, 1295, 1615, 1710; temperature_forward 955, 2205, 630, 1725, 595; vacancy_block 1000, 1015, 1170, 720, 1415; vacancy_extrapolation 1220, 1330, 1515, 1105, 1530.
+- **log10_I MAE, mean ± std over 5 seeds, before → after** (`results/mlp_vs_classical.csv`):
+  - supplied 0.157 ± 0.006 → **0.052 ± 0.008** (better; under-training confirmed as the cause)
+  - temperature_forward 0.188 ± 0.054 → 0.174 ± 0.071 (slightly better on average, larger spread)
+  - vacancy_block 1.008 ± 0.085 → 1.008 ± 0.085 (identical: no fit in this job reached 1,500 epochs before, so nothing changed)
+  - vacancy_extrapolation 0.924 ± 0.288 → **0.917 ± 0.289** (essentially unchanged, not worse on average). Per seed (`results/metrics_mlp.csv`): seed 0 got slightly worse (0.900 → 0.909), seeds 2 and 4 slightly better (0.902 → 0.867, 0.546 → 0.543), seeds 1 and 3 almost unchanged. Blocked CV now picks weight decay 0 instead of 1e-4 for this job.
+- **The conclusion still holds:** the GP (0.001, 0.019) and boosting (0.650, 0.480) remain better than the MLP for log10_I on every protocol.
+- **Run time:** the 4 log10_I jobs took 901 s (was 732 s). A fresh MLP step is 2,163 s (901 I–V + 1,262 curve-level, sum of `fit_seconds`). With the classical step (1,132 s) a fresh full run is about 3,295 s ≈ **55 min**. That is under the one-hour budget, with little margin.
