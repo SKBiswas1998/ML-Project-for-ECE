@@ -15,3 +15,10 @@ py -3.13 -m venv .venv
 ```
 
 Every constant is in `config.yaml`. The data flow and glossary are in `docs/ARCHITECTURE.md`.
+
+## Run in Google Colab or Kaggle
+Open `notebooks/WTe2_TIFET_pipeline.ipynb`:
+- **Colab:** https://colab.research.google.com/github/SKBiswas1998/ML-Project-for-ECE/blob/test_1/notebooks/WTe2_TIFET_pipeline.ipynb
+- **Kaggle:** *File → Import Notebook → GitHub*, then paste the repository URL and choose the notebook. Turn **Internet on** in the notebook settings, because it clones the repository.
+
+The notebook clones the repository, installs only the missing packages, runs the tests, and shows every stage's results from `results/*.csv` (about 2 min). Set `RERUN_CLASSICAL` / `RERUN_MLP` to `True` to recompute the models from scratch (about 20 / 65 min on a CPU).

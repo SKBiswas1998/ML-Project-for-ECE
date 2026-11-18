@@ -71,3 +71,10 @@ Stage 3 questions were unanswered, so the defaults apply: no final-split embargo
 - **Compute budget EXCEEDED.** The MLP step took about 3,890 s of fitting in total (sum of `fit_seconds` in `results/metrics_mlp.csv`), of which log10_I took about 3,025 s. With the classical step (1,132 s) the full run is about 84 min against the "well under an hour" target. Fix options are in the Stage 5 review; nothing has been changed yet.
 - **Memory:** the first MLP run was stopped by the system for low memory with 4 parallel fits. `compute.n_jobs` is now 2. Speed only, not results; not part of the cache key.
 - **Early stopping cap:** 4 of the 80 seed fits stopped at the 1,500-epoch limit rather than by patience (`best_epochs` in `results/metrics_mlp.csv`), all on curve-level supplied-split tasks.
+
+## 2026-11-18 — Notebook for Colab / Kaggle (requested before Stage 6)
+
+- **`notebooks/WTe2_TIFET_pipeline.ipynb`** clones the public repository (branch `test_1`), installs only pyyaml, pytest and scikit-learn ≥ 1.5 (the platforms already ship numpy, pandas, scipy, torch and matplotlib), and calls package functions only. Every cell has a heading naming the question it answers.
+- **The slow model runs are off by default** (`RERUN_CLASSICAL`, `RERUN_MLP`). The notebook reads the committed results so it finishes in about 2 min. *Rejected:* always re-running, which would take about 85 min and could hit Colab's idle timeout.
+- **Verified** by executing the notebook in an empty folder, cloning from GitHub: all cells ran, 50 tests passed, and the outputs match `results/*.csv`. Total time was 96 s locally (scratch run).
+- The notebook needs no torch reinstall. On a GPU runtime it still runs on CPU (`compute.device: cpu`).
