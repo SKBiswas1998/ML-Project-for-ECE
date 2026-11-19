@@ -9,3 +9,4 @@ matplotlib>=3.8
 pyyaml>=6.0
 pytest>=8.0
 ruff>=0.5
+psutil>=5.9        # per-job memory log of the MLP step

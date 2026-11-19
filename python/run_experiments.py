@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import time
 from collections.abc import Callable
 from functools import partial
@@ -17,6 +18,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import psutil
 from joblib import Parallel, delayed
 from sklearn.base import clone
 
@@ -24,6 +26,7 @@ from wte2ml.config import load_config, repo_path
 from wte2ml.data import curve_matrix, load_dataset
 from wte2ml.evaluate import regression_metrics, skill_score
 from wte2ml.models import MODELS, NAIVE_MODELS, build_model, features, tune_and_fit
+from wte2ml.robustness import input_steps, noise_curve, summarise
 from wte2ml.splits import Split, all_protocols, blocked_cv_folds, fold_indices
 from wte2ml.targets import curve_targets
 from wte2ml.unsupervised import (
@@ -71,7 +74,7 @@ def step_splits(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
     rows = []
     for split in all_protocols(curves, cfg):
         rows.append(_describe(split, split.name))
-        rows += [_describe(f, split.name) for f in blocked_cv_folds(split.train, cfg)]
+        rows += [_describe(f, split.name) for f in blocked_cv_folds(split.train, cfg, split.cv_axis)]
     path = out_dir / "split_summary.csv"
     pd.DataFrame(rows).to_csv(path, index=False)
     return [path]
@@ -106,6 +109,17 @@ def _predict(model: Any, X: np.ndarray, name: str) -> tuple[np.ndarray, np.ndarr
     return model.predict(X), np.full(len(X), np.nan)
 
 
+def _tuned(cfg: dict[str, Any], model_name: str, target: str, d: dict[str, Any]
+           ) -> tuple[Any, dict[str, Any], float]:
+    """Build ``model_name``, tune it by blocked CV on ``d`` (from _task_data/_mlp_task_data),
+    refit on the whole training pool. Shared by the classical, MLP and robustness steps.
+    The MLP gets the log10_I-only epoch limit; per-gate models get the gate column."""
+    est, grid = build_model(model_name, cfg, pointwise=d["gate"] is not None)
+    if model_name == "mlp" and target == cfg["experiments"]["point_target"]:
+        est.set_params(max_epochs=cfg["experiments"]["mlp_iv_max_epochs"])
+    return tune_and_fit(est, grid, d["X_train"], d["y_train"], d["cv"], cfg)
+
+
 def run_job(cfg: dict[str, Any], split: Split, table: pd.DataFrame, feature: str,
             target: str, model_name: str) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Tune one model by blocked CV inside ``split.train``, refit, predict ``split.test`` once.
@@ -114,9 +128,8 @@ def run_job(cfg: dict[str, Any], split: Split, table: pd.DataFrame, feature: str
     Returns the test predictions (one row per test row) and a metadata dict.
     """
     d = _task_data(cfg, split, table, feature, target)
-    est, grid = build_model(model_name, cfg, pointwise=d["gate"] is not None)
     t0 = time.perf_counter()
-    model, params, cv_mse = tune_and_fit(est, grid, d["X_train"], d["y_train"], d["cv"], cfg)
+    model, params, cv_mse = _tuned(cfg, model_name, target, d)
     mean, std = _predict(model, d["X_test"], model_name)
     pred = d["test_keys"].assign(y_true=d["y_test"], y_pred=mean, y_std=std)
     meta = {"cv_mse": cv_mse, "best_params": json.dumps({k: str(v) for k, v in params.items()}),
@@ -135,22 +148,37 @@ def _task_data(cfg: dict[str, Any], split: Split, table: pd.DataFrame, feature: 
         "gate": gate,
         "X_train": features(train, feature, gate), "y_train": train[target].to_numpy(),
         "X_test": features(test, feature, gate), "y_test": test[target].to_numpy(),
-        "cv": fold_indices(train, blocked_cv_folds(train, cfg)),
+        "cv": fold_indices(train, blocked_cv_folds(train, cfg, split.cv_axis)),
         "test_keys": keys.rename(columns={gate: "gate_V"} if gate else {}),
     }
 
 
+def _log_memory(log: Path, job: dict[str, str], seconds: float) -> None:
+    """Append this process's memory after a job: current resident set and its peak so far
+    (peak working set on Windows; NaN where the OS does not report it). One row per job, so
+    growth over a run is visible."""
+    info = psutil.Process().memory_info()
+    peak = getattr(info, "peak_wset", float("nan"))
+    row = pd.DataFrame([{"finished": time.strftime("%Y-%m-%d %H:%M:%S"), "pid": os.getpid(), **job,
+                         "job_seconds": seconds, "rss_MB": round(info.rss / 2**20, 1),
+                         "peak_MB": round(peak / 2**20, 1)}])
+    row.to_csv(log, mode="a", header=not log.exists(), index=False)
+
+
 def _cached(cache: Path, job: dict[str, str], compute: Callable[[], tuple[pd.DataFrame, dict]],
-            tag: str = "") -> tuple[pd.DataFrame, dict[str, Any]]:
+            tag: str = "", memory_log: Path | None = None) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Return a job's (predictions, metadata) from disk, or run ``compute`` and store it.
     Makes long runs resumable: an interrupted run skips every finished job. ``tag`` adds
-    job-specific settings to the file name (e.g. the log10_I epoch limit)."""
+    job-specific settings to the file name (e.g. the log10_I epoch limit). Newly computed
+    jobs are recorded in ``memory_log`` if given."""
     path = cache / ("__".join([*job.values(), *([tag] if tag else [])]) + ".pkl")
     if path.exists():
         return pd.read_pickle(path)
     pred, meta = compute()
     pred = pred.assign(**job)
     pd.to_pickle((pred, meta), path)
+    if memory_log is not None:
+        _log_memory(memory_log, job, meta["fit_seconds"])
     print(f"  {job} cv_mse={meta['cv_mse']:.4g} ({meta['fit_seconds']} s)", flush=True)
     return pred, meta
 
@@ -187,7 +215,8 @@ def step_classical(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
     preds, metas = [], []
     for split, job in _jobs(cfg, all_protocols(curves, cfg)):
         table = iv if job["target"] == cfg["experiments"]["point_target"] else curves
-        pred, meta = _cached(cache, job, partial(run_job, cfg, split, table, job["feature"], job["target"], job["model"]))
+        pred, meta = _cached(cache, job, partial(run_job, cfg, split, table, job["feature"], job["target"], job["model"]),
+                             tag=split.fingerprint())
         preds.append(pred)
         metas.append({**job, **meta})
     pred = pd.concat(preds, ignore_index=True)
@@ -227,7 +256,7 @@ def _curve_output_data(cfg: dict[str, Any], split: Split, iv: pd.DataFrame, feat
                          "gate_V": np.tile(gate_V, len(te_keys))})
     return {"gate": None, "X_train": _curve_features(tr_keys, per_curve, feature), "y_train": Y_train,
             "X_test": _curve_features(te_keys, per_curve, feature), "y_test": Y_test.ravel(),
-            "cv": fold_indices(tr_keys, blocked_cv_folds(tr_keys, cfg)), "test_keys": keys}
+            "cv": fold_indices(tr_keys, blocked_cv_folds(tr_keys, cfg, split.cv_axis)), "test_keys": keys}
 
 
 def _mlp_task_data(cfg: dict[str, Any], split: Split, table: pd.DataFrame, target: str
@@ -252,11 +281,8 @@ def run_mlp_job(cfg: dict[str, Any], split: Split, table: pd.DataFrame, target: 
     """Tune the MLP by blocked CV with the first seed, then refit with every seed in
     ``models.mlp.seeds`` (in parallel). Returns predictions (one block per seed) and metadata."""
     d = _mlp_task_data(cfg, split, table, target)
-    est, grid = build_model("mlp", cfg, pointwise=False)
-    if target == cfg["experiments"]["point_target"]:
-        est.set_params(max_epochs=cfg["experiments"]["mlp_iv_max_epochs"])
     t0 = time.perf_counter()
-    best, params, cv_mse = tune_and_fit(est, grid, d["X_train"], d["y_train"], d["cv"], cfg)
+    best, params, cv_mse = _tuned(cfg, "mlp", target, d)
     seeds = cfg["models"]["mlp"]["seeds"]
     runs = Parallel(n_jobs=cfg["compute"]["n_jobs"])(delayed(_fit_seed)(best, s, d) for s in seeds)
     pred = pd.concat([d["test_keys"].assign(seed=s, y_true=d["y_test"], y_pred=p, y_std=np.nan)
@@ -293,23 +319,37 @@ def _mlp_summary(per_seed: pd.DataFrame, classical: pd.DataFrame) -> pd.DataFram
     return out.assign(mlp_beats_best_classical=out.mlp_MAE_mean < out.best_classical_MAE)
 
 
+def _mlp_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Copy of cfg with compute.n_jobs = compute.mlp_n_jobs (MLP fits need more memory)."""
+    return {**cfg, "compute": {**cfg["compute"], "n_jobs": cfg["compute"]["mlp_n_jobs"]}}
+
+
 def step_mlp(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
-    """MLP on every protocol for ``experiments.mlp_targets``; needs the classical results."""
+    """MLP on every protocol for ``experiments.mlp_targets``; needs the classical results.
+    Uses ``compute.mlp_n_jobs`` parallel fits (MLP fits need more memory than GP fits)."""
+    cfg = _mlp_cfg(cfg)
     ds = load_dataset(cfg)
     curves = curve_targets(ds.metrics_pooled(), ds.iv_pooled(), cfg)
     iv = ds.iv_pooled().reset_index(drop=True)
     classical = pd.read_csv(out_dir / "metrics_classical.csv")
     cache = repo_path(cfg, "cache_dir") / f"mlp_{_config_hash(cfg, 'mlp')}"
     cache.mkdir(parents=True, exist_ok=True)
+    only = cfg.get("run", {}).get("protocols")        # --protocols: fill the cache for these only
     preds, metas = [], []
     for split in all_protocols(curves, cfg):
+        if only and split.name not in only:
+            continue
         for target in cfg["experiments"]["mlp_targets"]:
             job = {"protocol": split.name, "feature": cfg["experiments"]["mlp_vacancy_feature"], "target": target}
             table = iv if target == cfg["experiments"]["point_target"] else curves
             pred, meta = _cached(cache, job, partial(run_mlp_job, cfg, split, table, target),
-                                 tag=_iv_tag(cfg, target))
+                                 tag="_".join(filter(None, [split.fingerprint(), _iv_tag(cfg, target)])),
+                                 memory_log=out_dir / "memory_log.csv")
             preds.append(pred)
             metas.append({**job, **meta})
+    if only:
+        print(f"  cached MLP jobs for {only}; run 'mlp' without --protocols to write the result files")
+        return []
     pred = pd.concat(preds, ignore_index=True)
     per_seed = _mlp_score(pred, pd.DataFrame(metas), classical)
     paths = [out_dir / "predictions_mlp.csv.gz", out_dir / "metrics_mlp.csv", out_dir / "mlp_vs_classical.csv"]
@@ -351,15 +391,52 @@ def step_unsupervised(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
     return paths
 
 
+def _robustness_job(cfg: dict[str, Any], split: Split, table: pd.DataFrame, target: str,
+                    model_name: str) -> pd.DataFrame:
+    """Tune and fit one model on clean data, then score it on noisy copies of the test inputs."""
+    r = cfg["robustness"]
+    run_cfg = _mlp_cfg(cfg) if model_name == "mlp" else cfg
+    d = (_mlp_task_data(run_cfg, split, table, target) if model_name == "mlp"
+         else _task_data(run_cfg, split, table, cfg["inputs"]["vacancy_features"][0], target))
+    model = _tuned(run_cfg, model_name, target, d)[0]
+    steps = input_steps(cfg, d["X_test"].shape[1])
+    curve = noise_curve(model, d["X_test"], d["y_test"], steps, r["noise_fractions"], r["repeats"], r["seed"])
+    return curve.assign(protocol=split.name, target=target, model=model_name)
+
+
+def step_robustness(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
+    """Gaussian input-noise test (project proposal) for the models and protocols in config."""
+    r = cfg["robustness"]
+    ds = load_dataset(cfg)
+    iv = ds.iv_pooled().reset_index(drop=True)
+    curves = curve_targets(ds.metrics_pooled(), iv, cfg)
+    splits = {s.name: s for s in all_protocols(curves, cfg)}
+    parts = []
+    for name in r["protocols"]:
+        for target in r["targets"]:
+            table = iv if target == cfg["experiments"]["point_target"] else curves
+            for model_name in r["models"]:
+                t0 = time.perf_counter()
+                parts.append(_robustness_job(cfg, splits[name], table, target, model_name))
+                print(f"  robustness {name} {target} {model_name} ({time.perf_counter() - t0:.0f} s)", flush=True)
+    raw = pd.concat(parts, ignore_index=True)
+    paths = [out_dir / "robustness_noise.csv", out_dir / "robustness_summary.csv"]
+    raw.to_csv(paths[0], index=False)
+    summarise(raw, ["protocol", "target", "model"]).to_csv(paths[1], index=False)
+    return paths
+
+
 STEPS = {"targets": step_targets, "splits": step_splits, "classical": step_classical,
-         "mlp": step_mlp, "unsupervised": step_unsupervised}
+         "mlp": step_mlp, "unsupervised": step_unsupervised, "robustness": step_robustness}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("steps", nargs="+", choices=sorted(STEPS))
+    parser.add_argument("--protocols", nargs="+", default=None,
+                        help="mlp only: compute just these protocols (fills the cache, writes no CSVs)")
     args = parser.parse_args()
-    cfg = load_config()
+    cfg = {**load_config(), "run": {"protocols": args.protocols}}   # 'run' is not part of any cache key
     out_dir = repo_path(cfg, "results_dir")
     out_dir.mkdir(parents=True, exist_ok=True)
     timings = []
@@ -367,9 +444,14 @@ def main() -> None:
         t0 = time.perf_counter()
         for p in STEPS[name](cfg, out_dir):
             print(f"wrote {p}")
-        timings.append({"step": name, "seconds": round(time.perf_counter() - t0, 2)})
-    pd.DataFrame(timings).to_csv(out_dir / "timings_last_run.csv", index=False)
-    print(pd.DataFrame(timings).to_string(index=False))
+        timings.append({"finished": time.strftime("%Y-%m-%d %H:%M:%S"), "step": name,
+                        "seconds": round(time.perf_counter() - t0, 2),
+                        "n_jobs": cfg["compute"]["mlp_n_jobs" if name == "mlp" else "n_jobs"]})
+    table = pd.DataFrame(timings)
+    table.to_csv(out_dir / "timings_last_run.csv", index=False)
+    log = out_dir / "timings_log.csv"     # every run appended, so each step's time stays on record
+    table.to_csv(log, mode="a", header=not log.exists(), index=False)
+    print(table.to_string(index=False))
 
 
 if __name__ == "__main__":
