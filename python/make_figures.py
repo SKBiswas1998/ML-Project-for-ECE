@@ -15,7 +15,7 @@ from scipy.interpolate import PchipInterpolator
 
 from wte2ml.config import load_config, repo_path
 from wte2ml.data import curve_matrix, load_dataset
-from wte2ml.evaluate import comparison_table
+from wte2ml.evaluate import comparison_table, pooled_predictions
 from wte2ml.plots import error_profile, heatmap, iv_with_bands, predicted_vs_true, robustness_lines
 from wte2ml.targets import falling_branch, swing_table
 
@@ -129,16 +129,9 @@ def _save(fig, out_dir: Path, name: str) -> Path:
 
 
 def load_predictions(res: Path) -> pd.DataFrame:
-    """All test predictions: classical models as stored; MLP averaged over its seeds."""
-    classical = pd.read_csv(res / "predictions_classical.csv.gz")
-    mlp = pd.read_csv(res / "predictions_mlp.csv.gz")
-    keys = ["protocol", "feature", "target", "T_K", "vac_pct", "gate_V"]
-    mlp = (mlp.assign(gate_V=mlp.gate_V.fillna(-1)).groupby(keys, as_index=False)
-           .agg(y_true=("y_true", "first"), y_pred=("y_pred", "mean"))
-           .assign(model="mlp", y_std=np.nan))
-    mlp["gate_V"] = mlp.gate_V.replace(-1, np.nan)
-    return pd.concat([classical, mlp], ignore_index=True)
-
+    """All test predictions (MLP averaged over seeds), see evaluate.pooled_predictions."""
+    return pooled_predictions(pd.read_csv(res / "predictions_classical.csv.gz"),
+                              pd.read_csv(res / "predictions_mlp.csv.gz"))
 
 def figure_ratio_heatmap(res: Path, out_dir: Path) -> Path:
     """log10 Ion/Ioff (supplied end-point definition) over the full T x vacancy grid."""

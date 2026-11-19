@@ -28,7 +28,7 @@ def skill_score(mse_model: float, mse_best_naive: float) -> float:
 
 
 def comparison_table(classical: pd.DataFrame, mlp_per_seed: pd.DataFrame) -> pd.DataFrame:
-    """One row per (protocol, target, model): MAE, RMSE, R2, skill (MLP = mean over seeds,
+    """One row per (protocol, target, model): MAE, RMSE, R2, skill (MLP = mean over seeds of the per-seed metrics,
     with MAE_std), the rank of the model by MAE within its task, and whether it is best.
 
     classical: results/metrics_classical.csv; mlp_per_seed: results/metrics_mlp.csv.
@@ -39,4 +39,17 @@ def comparison_table(classical: pd.DataFrame, mlp_per_seed: pd.DataFrame) -> pd.
         mlp_per_seed.groupby(task).MAE.std().rename("MAE_std")).reset_index().assign(model="mlp")
     both = pd.concat([classical[[*task, "model", *cols]], mlp], ignore_index=True)
     both["rank"] = both.groupby(task).MAE.rank(method="min").astype(int)
+    naive = (classical[classical.model.isin(["naive_vac_mean", "naive_nn"])]
+             .pivot_table(index=task, columns="model", values="MAE").add_prefix("MAE_").reset_index())
+    both = both.merge(naive, on=task, how="left")   # both naive baselines shown on every row
     return both.assign(best=both["rank"] == 1).sort_values([*task, "rank"], ignore_index=True)
+
+
+def pooled_predictions(classical: pd.DataFrame, mlp: pd.DataFrame) -> pd.DataFrame:
+    """All test predictions in one table: classical models as stored, the MLP as the mean of
+    its seeds (results/predictions_classical.csv.gz and predictions_mlp.csv.gz)."""
+    keys = ["protocol", "feature", "target", "T_K", "vac_pct", "gate_V"]
+    m = (mlp.assign(gate_V=mlp.gate_V.fillna(-1)).groupby(keys, as_index=False)
+         .agg(y_true=("y_true", "first"), y_pred=("y_pred", "mean")).assign(model="mlp", y_std=np.nan))
+    m["gate_V"] = m.gate_V.replace(-1, np.nan)
+    return pd.concat([classical, m], ignore_index=True)
