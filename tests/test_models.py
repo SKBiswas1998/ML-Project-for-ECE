@@ -40,9 +40,10 @@ def test_gp_reproduces_smooth_function_and_returns_std():
     cfg = load_config()
     df = _grid_table()
     est, grid = build_model("gp", cfg, pointwise=True)
-    assert grid == {}
+    (key, kernels), = grid.items()                    # kernel family is tuned by CV
+    assert key == "estimator__gaussianprocessregressor__kernel" and len(kernels) == 2
     X = df[["T_K", "vac_pct", "gate_V"]].to_numpy(float)
-    est.fit(X, df.y.to_numpy())
+    est.set_params(**{key: kernels[0]}).fit(X, df.y.to_numpy())
     mean, std = est.predict(X, return_std=True)
     assert np.allclose(mean, df.y, atol=1e-2) and np.all(std >= 0)
 
