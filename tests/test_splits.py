@@ -78,12 +78,13 @@ def test_vacancy_block_ranges(protocols):
     s = protocols["vacancy_block"]
     assert _levels(s.test) == [8, 9, 10, 11, 12]
     assert not set(_levels(s.train)) & {8, 9, 10, 11, 12}
-    assert s.test["T_K"].nunique() == 38 and (len(s.train), len(s.test)) == (16 * 38, 5 * 38)
+    assert s.test["T_K"].nunique() == 38 and (len(s.train), len(s.test)) == (14 * 38, 5 * 38)
+    assert not set(_levels(s.train)) & {7, 13}        # 1-level embargo next to the block
 
 
 def test_vacancy_extrapolation_ranges(protocols):
     s = protocols["vacancy_extrapolation"]
-    assert _levels(s.train) == list(range(16)) and _levels(s.test) == list(range(16, 21))
+    assert _levels(s.train) == list(range(15)) and _levels(s.test) == list(range(16, 21))   # 1.5 % embargoed
 
 
 def test_float_vacancy_values_map_to_correct_level():
@@ -129,3 +130,29 @@ def test_zero_embargo_drops_nothing(protocols, cfg):
     pool = protocols["supplied"].train
     for f in blocked_cv_folds(pool, c):
         assert len(f.train) + len(f.test) == len(pool)
+
+
+def test_temperature_protocol_tunes_on_temperature_blocks(protocols, cfg):
+    """62-78 K test: CV folds hold out consecutive temperatures (all vacancy levels), never
+    see T > 60 K, and drop one temperature on each side of the held-out block."""
+    s = protocols["temperature_forward"]
+    assert s.cv_axis == "temperature"
+    folds = blocked_cv_folds(s.train, cfg, s.cv_axis)
+    seen = sorted(int(t) for f in folds for t in f.test["T_K"].unique())
+    assert seen == list(range(4, 62, 2))                       # every training temperature once
+    for f in folds:
+        val = sorted(f.test["T_K"].unique())
+        assert f.test["vac_pct"].nunique() == 21
+        assert val == list(range(val[0], val[-1] + 1, 2))      # consecutive temperatures
+        gap = min(abs(t - v) for t in f.train["T_K"].unique() for v in val)
+        assert gap > 2 * cfg["splits"]["cv_temp_embargo_levels"]
+        assert f.train["T_K"].max() <= 60
+
+
+def test_fingerprint_changes_with_the_split(protocols, curves, cfg):
+    fps = {s.fingerprint() for s in protocols.values()}
+    assert len(fps) == 4
+    other = copy.deepcopy(cfg)
+    other["splits"]["holdout_embargo_levels"] = 0
+    from wte2ml.splits import vacancy_block
+    assert vacancy_block(curves, other).fingerprint() != protocols["vacancy_block"].fingerprint()

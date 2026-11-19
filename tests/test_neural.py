@@ -47,3 +47,14 @@ def test_multi_output_predicts_whole_curve():
     P = m.predict(Xc)
     assert P.shape == (36, 5)
     assert np.mean(np.abs(P - Yc)) < 0.1 * np.std(Yc)
+
+
+def test_reports_whether_training_hit_the_epoch_cap():
+    """stop_epoch_ is the last epoch run; hit_epoch_cap_ separates 'ran out of epochs' from
+    'stopped by patience', which is how we check the I-V MLP is not under-trained."""
+    X, y = _data()
+    capped = MLPRegressor(**{**FAST, "max_epochs": 20, "patience": 10_000}).fit(X, y)
+    assert capped.stop_epoch_ == 19 and capped.hit_epoch_cap_
+    early = MLPRegressor(**{**FAST, "max_epochs": 5000, "patience": 10}).fit(X, y)
+    assert early.stop_epoch_ < 4999 and not early.hit_epoch_cap_
+    assert early.stop_epoch_ - early.best_epoch_ >= 10

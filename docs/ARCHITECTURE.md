@@ -106,3 +106,53 @@ $$ \widehat{\mathrm{Err}}(\theta) = \frac{1}{K}\sum_{k=1}^{K} \frac{1}{|B_k|}\su
 **Equation (one hidden layer shown; we use 2–3).** $\hat y(x) = w_2^\top\, \sigma(W_1 x + b_1) + b_2,\quad \min_\theta \tfrac1n\sum_i (y_i - \hat y(x_i))^2 + \lambda\lVert\theta\rVert^2$
 **Why here.** One network can represent a whole I–V curve, including the sharp drop, without fixing its shape in advance. For log10 I it maps (T, vacancy) to all 20 gate points at once (638 rows, not 12,760), which keeps training cheap on a CPU.
 **Failure mode here.** Only 798 curves from one nested layout: the network can memorise layout-specific bumps it cannot generalise. Results also depend on the random initialisation, so we report the mean ± std over 5 seeds. With dropout 0 and noiseless data, early stopping and weight decay are the only regularisers.
+
+## Modules added in Stage 6
+
+**unsupervised.py** fits a PCA of the 798 log10 I–V curves (`fit_pca`, `explained_variance_table`, `component_table`) and clusters the curves in the space of the leading PCA scores (`cluster`, `cluster_scores`). It compares the clusters with a physics label: three log10 Ion/Ioff classes from `ion_ioff_classes`. It is descriptive only. It is fitted on all 798 curves, never feeds a prediction, and so does not touch the train/test protocols. `run_experiments.py unsupervised` writes `results/pca_explained_variance.csv`, `pca_components.csv`, `cluster_scores.csv` and `cluster_assignments.csv`. `make_figures.py` draws `figures/pca_clusters.png` from them.
+
+## Technique: principal component analysis (unsupervised learning: dimensionality reduction)
+**Idea.** Each I–V curve is a point in a 20-dimensional space (one axis per gate voltage). PCA finds the directions along which the curves differ most. The first component is the single curve shape that, added to the mean curve in varying amounts, explains the most variation, and so on. If a few components explain almost everything, the curves really have only a few degrees of freedom.
+**Equation.** Centred data $\tilde Y = Y - \bar y$, with $\tilde Y = U S V^\top$ (SVD). Components are the rows of $V^\top$, scores $Z = \tilde Y V$, and explained-variance share $s_j^2 / \sum_i s_i^2$.
+**Why here.** All 20 columns share one unit (decades), so no rescaling is needed, and the components can be read physically as curve shapes over gate voltage.
+**Failure mode here.** PCA is linear. A sharp drop that moves along the gate axis from device to device needs several components to describe, so "PCs needed" overstates how complex the physics is. It is also fitted on all curves, so it describes this dataset rather than predicting new devices.
+
+## Technique: k-means and Gaussian-mixture clustering (unsupervised learning: clustering)
+**Idea.** *k-means* puts k centres in the PCA-score space and assigns each curve to the nearest one, moving each centre to the mean of its curves until nothing changes. A *Gaussian mixture* models the points as k overlapping Gaussian clouds, each with its own shape (full covariance), fitted by expectation–maximisation. We judge the result by the *silhouette* (how much closer each curve is to its own cluster than to the next) and by the *adjusted Rand index* against the Ion/Ioff classes.
+**Equation (k-means objective; silhouette of point i).** $\min_{\{C_j\},\{\mu_j\}} \sum_j \sum_{i \in C_j} \lVert z_i - \mu_j \rVert^2, \qquad s_i = \frac{b_i - a_i}{\max(a_i, b_i)}$ ($a_i$: mean distance to its own cluster, $b_i$: to the nearest other cluster).
+**Why here.** It asks whether the devices fall into natural groups (working, degraded, failed) without being told the labels.
+**Failure mode here.** The data are not blobs. Each vacancy level traces a thin *strand* through PCA space as temperature changes, so the clusters cut the set of strands into bands of vacancy levels. The silhouette is then middling and nearly flat in k, and BIC keeps falling as k grows (noiseless data, no natural k).
+
+## Modules added in Stage 7
+
+**robustness.py** tests how a fitted model's error grows when its test inputs are perturbed. `input_steps` gives each input's grid step (2 K, 0.1 %, 0.1 V), `noisy` adds Gaussian noise of a chosen fraction of that step, `noise_curve` scores one model at every noise level and repeat, and `summarise` averages over repeats. `run_experiments.py robustness` writes `results/robustness_noise.csv` and `results/robustness_summary.csv`.
+
+**plots.py** holds the plotting primitives for the report figures (`heatmap`, `predicted_vs_true`, `error_profile`, `iv_with_bands`, `robustness_lines`). Each draws on a given axis from tables read from `results/*.csv`, so figures cannot compute numbers of their own. **evaluate.comparison_table** builds `results/model_comparison.csv`: one row per protocol × target × model with MAE, RMSE, R², skill, MLP seed spread and rank.
+
+**splits.py (changed):** each `Split` now carries a `cv_axis`. The 62–78 K protocol is tuned on blocks of consecutive temperatures, the others on vacancy blocks. `Split.fingerprint()` hashes the exact train/test curves for cache keys. Final vacancy tests now drop 1 neighbouring level from training.
+
+## Technique: input-noise robustness (supervised learning: evaluation)
+**Idea.** A surrogate should not change its answer wildly when its inputs are slightly wrong. We fit each model once on clean data, then predict the test set again with Gaussian noise added to temperature and vacancy, and watch the test error as the noise grows. Noise is measured in grid steps of each input, so "¼ step" means 0.5 K and 0.025 % vacancy.
+**Equation.** $\mathrm{MAE}(\sigma) = \mathbb{E}_{\varepsilon}\big[\tfrac1n\sum_i |\hat f(x_i + \varepsilon_i) - y_i|\big],\ \varepsilon_{ij} \sim \mathcal N(0, (\sigma\,\Delta_j)^2)$, with $\Delta_j$ the grid step of input j.
+**Why here.** It separates two very different reasons for a low test error: smooth physics the model has learned, or an exact look-up of the right device in a dense grid.
+**Failure mode here.** Vacancy is really a *label* for one specific layout, not a continuous measurement. Noise on it partly tests "what if we picked the neighbouring layout". The test is informative about the surrogate's behaviour but is not a model of real measurement error.
+
+## Modules added in Stage 8
+
+**uncertainty.py** computes confidence intervals for the reported test errors from the saved predictions. `level_sums` aggregates |error| per vacancy level, `resample_levels` and `bootstrap_mae` give the cluster bootstrap, `task_bootstrap` adds paired differences against the reference model with plain and Bonferroni intervals, and `gp_coverage` measures how often the truth falls inside the GP's 68 % / 95 % intervals. `run_experiments.py uncertainty` writes `results/bootstrap_ci.csv` and `results/gp_coverage.csv` in about a second.
+
+**ridge_numpy.py** is ridge regression written out in NumPy (`fit_ridge`, `effective_dof`, `coefficient_path`). It is a teaching companion to the sklearn model the pipeline uses and is checked against it to 1e-8.
+
+**run_experiments.py epoch_sensitivity** re-runs selected MLP jobs with a higher epoch limit in a separate cache folder and writes `results/epoch_sensitivity.csv`. **.github/workflows/tests.yml** runs the unit tests on GitHub (tests only, read-only).
+
+## Technique: cluster bootstrap (statistics for model evaluation)
+**Idea.** To see how much a test error would change with a different but similar test set, we redraw the test set many times with replacement and recompute the error. The units we redraw must be independent. Curves of one vacancy level share one defect layout and are near-copies, so the unit is a whole vacancy level with all its curves, not a single curve.
+**Equation.** For a resample $b$ of levels $\ell^{(b)}_1..\ell^{(b)}_L$: $\mathrm{MAE}^{(b)} = \sum_k S_{\ell_k^{(b)}} / \sum_k N_{\ell_k^{(b)}}$, with $S_\ell$ the summed |error| and $N_\ell$ the number of test rows at level ℓ. The 95 % interval is the 2.5th–97.5th percentile over $b$.
+**Why here.** Curve-level resampling would treat 190 dependent curves as 190 independent samples and report intervals about 5× too narrow (`tests/test_uncertainty.py`).
+**Failure mode here.** The vacancy tests have only 5 levels, so only 126 distinct resamples exist. The intervals are coarse and wide, and the bootstrap cannot estimate the uncertainty from the *one* layout we have.
+
+## Technique: predictive-interval coverage (supervised learning: GP uncertainty)
+**Idea.** A GP gives each prediction a standard deviation σ. If it is calibrated, the truth should fall inside ±1σ about 68 % of the time and inside ±1.96σ about 95 % of the time. We count how often it does on each test set.
+**Equation.** $\widehat{\mathrm{cov}}_z = \frac1n \sum_i \mathbb 1\big[|y_i - \mu_i| \le z\,\sigma_i\big]$, with z = 1 (68.27 %) or 1.96 (95 %).
+**Why here.** The proposal promised uncertainty estimates; coverage tests whether they mean anything.
+**Failure mode here.** Calibration holds only where the GP has seen the layout. Beyond the trained vacancy range the coverage collapses (0–65 % at the nominal 95 %), because the GP's σ does not grow fast enough for a genuinely new layout.

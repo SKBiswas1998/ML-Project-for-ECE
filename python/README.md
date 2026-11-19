@@ -21,4 +21,9 @@ Open `notebooks/WTe2_TIFET_pipeline.ipynb`:
 - **Colab:** https://colab.research.google.com/github/SKBiswas1998/ML-Project-for-ECE/blob/test_1/notebooks/WTe2_TIFET_pipeline.ipynb
 - **Kaggle:** *File → Import Notebook → GitHub*, then paste the repository URL and choose the notebook. Turn **Internet on** in the notebook settings, because it clones the repository.
 
-The notebook clones the repository, installs only the missing packages, runs the tests, and shows every stage's results from `results/*.csv` (about 2 min). Set `RERUN_CLASSICAL` / `RERUN_MLP` to `True` to recompute the models from scratch (about 20 / 65 min on a CPU).
+The notebook clones the repository, installs only the missing packages, runs the tests, and shows every stage's results from `results/*.csv` (about 2 min). Set `RERUN_CLASSICAL` / `RERUN_MLP` to `True` to recompute the models from scratch (about 31 / 100 min on a laptop CPU; robustness about 4 min).
+
+## Theory notebook
+`notebooks/WTe2_TIFET_theory.ipynb` explains every component in the order the data flows through the pipeline: what we do, the theory, what is optimised, and its figures and result tables, all loaded from the repository. It runs in under a minute and needs no model re-runs.
+- **Colab:** https://colab.research.google.com/github/SKBiswas1998/ML-Project-for-ECE/blob/test_1/notebooks/WTe2_TIFET_theory.ipynb
+- **Kaggle:** *File → Import Notebook → GitHub*, with Internet on.

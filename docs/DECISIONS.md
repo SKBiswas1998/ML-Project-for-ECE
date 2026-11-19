@@ -86,3 +86,65 @@ Stage 3 questions were unanswered, so the defaults apply: no final-split embargo
 - **Reproducible:** all 12 curve-level MLP jobs gave exactly the same MAE as the previous run (seeded, one torch thread per fit).
 - **Accuracy trade-off for log10_I** (`results/mlp_vs_classical.csv`): supplied 0.157 ± 0.006 (per-point MLP was 0.030), temperature_forward 0.188 ± 0.054 (was 0.078), vacancy_block 1.008 ± 0.085 (was 0.983), vacancy_extrapolation 0.924 ± 0.288 (was 1.572 ± 0.800). The overall conclusion is unchanged: the MLP beats the classical models only on curve-level vacancy extrapolation.
 - **Open:** on the supplied split all 5 seed fits stopped at or near the 1,500-epoch cap (best epochs 1330–1490), so the curve-output MLP is under-trained there (about 2 updates per epoch instead of about 20).
+
+## 2026-11-18 — Option 2: I–V MLP trained to early stopping (epoch limit 1,500 → 8,000)
+
+- **Setting:** `experiments.mlp_iv_max_epochs: 8000`, used only for the 4 log10_I MLP jobs. It is left out of the MLP cache hash (still 17f77466) and added to those jobs' cache file names (`maxep8000`), so the 12 curve-level MLP jobs were loaded from cache and are bit-identical (`changed = False` for all 12 in the comparison). The MLP now records `stop_epochs` (last epoch run) and `seeds_hit_epoch_cap` per job (`results/metrics_mlp.csv`).
+- **Every seed stopped by early stopping, none by the cap** (`seeds_hit_epoch_cap` = 0 for all 4 jobs). Last epoch run per seed (`stop_epochs`): supplied 1435, 1390, 1295, 1615, 1710; temperature_forward 955, 2205, 630, 1725, 595; vacancy_block 1000, 1015, 1170, 720, 1415; vacancy_extrapolation 1220, 1330, 1515, 1105, 1530.
+- **log10_I MAE, mean ± std over 5 seeds, before → after** (`results/mlp_vs_classical.csv`):
+  - supplied 0.157 ± 0.006 → **0.052 ± 0.008** (better; under-training confirmed as the cause)
+  - temperature_forward 0.188 ± 0.054 → 0.174 ± 0.071 (slightly better on average, larger spread)
+  - vacancy_block 1.008 ± 0.085 → 1.008 ± 0.085 (identical: no fit in this job reached 1,500 epochs before, so nothing changed)
+  - vacancy_extrapolation 0.924 ± 0.288 → **0.917 ± 0.289** (essentially unchanged, not worse on average). Per seed (`results/metrics_mlp.csv`): seed 0 got slightly worse (0.900 → 0.909), seeds 2 and 4 slightly better (0.902 → 0.867, 0.546 → 0.543), seeds 1 and 3 almost unchanged. Blocked CV now picks weight decay 0 instead of 1e-4 for this job.
+- **The conclusion still holds:** the GP (0.001, 0.019) and boosting (0.650, 0.480) remain better than the MLP for log10_I on every protocol.
+- **Run time:** the 4 log10_I jobs took 901 s (was 732 s). A fresh MLP step is 2,163 s (901 I–V + 1,262 curve-level, sum of `fit_seconds`). With the classical step (1,132 s) a fresh full run is about 3,295 s ≈ **55 min**. That is under the one-hour budget, with little margin.
+
+## 2026-11-18 — Stage 6 (PCA and clustering)
+
+Defaults kept for the four open questions (none affects this stage).
+- **PCA on the (798, 20) log10_I matrix, centred, not scaled.** Every column is in decades, so scaling would inflate the flat on-state columns (V < 0.8 V), which carry almost no variance. Fitted on all 798 curves: descriptive only, so no split is involved.
+- **Cluster on the first 6 PCs** (fewest reaching 99 % of variance, `cluster_variance_kept`). *Rejected:* clustering the raw 20 columns, which is dominated by the same directions but noisier; and 2 PCs only (91 %), which would cluster the picture rather than the data.
+- **Ion/Ioff classes for comparison:** < 4 failed, 4–9 degraded, ≥ 9 working (supplied log10 Ion/Ioff). The 9-decade edge sits in a sparse region of the histogram (13 of 798 curves between 9 and 11). The 4-decade edge is a convention we chose, not a property of the data. Class sizes: 190 failed, 552 degraded, 56 working (`results/cluster_assignments.csv`).
+- **Methods:** k-means and a full-covariance Gaussian mixture, k = 2–6, 10 restarts, seed 0.
+- **Bug caught by a test:** `n_components_for` returned one component too many when the requested share was never reached. It is fixed. Our results were unaffected (99 % is reached at 6 of 10 components).
+- **Finding (checked numerically, not only by eye):** the clusters are bands of vacancy levels. With k = 3, k-means keeps 19 of 21 levels entirely in one cluster (0.3 % and 1.3 % are split by temperature), and the Gaussian mixture keeps 20 of 21 (1.3 % split). Scratch check from `results/cluster_assignments.csv`.
+
+## 2026-11-18 — Stage 7 (final protocol changes, robustness, figures, report notes)
+
+Your decisions, all applied in one fresh run:
+1. **Headline target = log10_Ion_Ioff** (supplied end-point Ioff). log10_Ion_Ioff_min is reported as sensitivity: it uses the lowest current of the sweep, not the current at 1.9 V.
+2. **1-level embargo on the final vacancy tests** (`holdout_embargo_levels: 1`): the vacancy block now trains without 0.7 and 1.3 % (532 curves), and extrapolation without 1.5 % (570 curves) [`results/split_summary.csv`].
+3. **Temperature-blocked CV for the 62–78 K test:** `Split.cv_axis = "temperature"`, 5 blocks of consecutive temperatures inside 4–60 K, 1-temperature embargo (`cv_temp_*`).
+4. **GP kernel chosen by blocked CV** (RBF vs. Matérn-5/2); length scales and noise are still fitted by marginal likelihood. `KernelSelectGP` was removed. CV chose Matérn-5/2 in 29 of 32 GP jobs [`results/metrics_classical.csv`, best_params].
+5. **Option B for run time:** 4 parallel classical fits, serial MLP (`compute.mlp_n_jobs: 1`), GP and MLP on all 8 targets, and `n_vac_atoms` dropped. The Stage 4 encoding finding is kept in `results/encoding_comparison_stage4.csv` (median ratio 1.0, 168 jobs).
+
+Implementation choices:
+- **Cache names include a split fingerprint** (hash of the exact train/test curves and CV axis), so a cached job is never reused for a different split. The MLP log10_I epoch limit stays in the file name (`maxep8000`).
+- **Robustness step** (`wte2ml/robustness.py`, `run_experiments.py robustness`): Gaussian noise on the TEST inputs only, std = 0, ¼, ½, 1 grid step per input (2 K, 0.1 %), 5 draws, protocols supplied and vacancy_block, target log10_Ion_Ioff, 7 models. Each model is tuned and fitted once on clean data, with MLP seed 0 only. *Rejected:* one shared noise level in standardised units, because a 1-σ change in temperature and in vacancy mean very different things physically.
+- **Shared `_tuned` helper** for the classical, MLP and robustness steps, so the tuning logic is not repeated.
+- **Figures:** plotting primitives moved to `wte2ml/plots.py`. `make_figures.py` only reads `results/*.csv` and saves PNGs, filtering to one vacancy encoding so encodings can never mix in a figure. `results/model_comparison.csv` comes from `evaluate.comparison_table`.
+- **Resuming after a low-memory stop:** the MLP was stopped by the system after 16 of 32 jobs (free RAM 0.5–0.9 GB). On restart, `--protocols` ran the vacancy block and extrapolation in separate processes, and a per-job memory log (`results/memory_log.csv`, needs `psutil`) showed a flat peak of 394 / 398 MB per process. The 16 cached jobs were reused unchanged (MLP cache key 52fd9793 unchanged).
+- **Run times are summed per job** because the MLP run spans two sessions: classical 1,827 s, MLP 6,043 s, robustness 253 s, figures 49 s, about 2 h 16 min in total [`results/timings_log.csv`, `metrics_*.csv`]. That is **over the one-hour budget**, mainly because of the serial MLP on 8 targets.
+- **Wording:** the 9-decade class edge lies in a *sparse region* of the histogram (13 of 798 curves between 9 and 11), not an empty gap. SPD = 0.05·Ioff duplicates Ioff. DED and τ_d are not exact copies of another modelled target (τ_d = 20·DED/Ion), and P_dyn = 0.05·Ion exactly. All verified on the supplied metrics files.
+
+Results that changed (for the full story see `docs/REPORT_NOTES.md`):
+- The MLP's Stage 5 win on vacancy extrapolation of log10 Ion/Ioff (1.080 ± 0.343) **did not survive the embargo**: 4.378 ± 3.280, against ridge 2.204 [`results/mlp_vs_classical.csv`].
+- 51 of 140 curve-level MLP seed fits reached the 1,500-epoch limit (none of the 20 I–V fits did) [`results/metrics_mlp.csv`].
+
+## 2026-11-18 — Stage 8 (uncertainty, coverage, ridge from scratch, CI, epoch-cap check)
+
+- **Cluster bootstrap over whole vacancy levels** (your rule 1), 2,000 resamples, on the saved predictions with no refits. *Rejected:* resampling single curves, which treats 38 near-copies of one layout as independent; a test shows that gives intervals more than 5× too narrow on clustered data. Also *rejected:* a two-way bootstrap over vacancy × temperature. With 5 levels in the vacancy tests, the level clustering already dominates, and temperature curves inside a level are not independent either.
+- **Paired comparisons** use the better naive baseline by test MSE (the skill reference) as reference, with the same resampled levels for both models. **192 comparisons are counted** (32 tasks × 6 models), and a Bonferroni-adjusted interval at 1 − 0.05/192 is reported next to the plain 95 % one.
+- **MLP in the bootstrap = its 5-seed ensemble** (mean prediction); `model_comparison.csv` keeps the mean of the per-seed MAEs. Both are now labelled in REPORT_NOTES. The classical models agree between the two files to 1e-14.
+- **GP coverage:** nominal 68.27 % (±1σ) and 95 % (±1.96σ) per protocol × target, plus the mean predictive σ.
+- **Ridge from scratch** (`wte2ml/ridge_numpy.py`): closed form on standardised X with an unpenalised intercept, exactly the pipeline's StandardScaler + Ridge. The test uses the real cubic-feature task at the 4 grid α values, atol 1e-8. Coefficient path and effective dof included.
+- **CI checked first** (your rule 4): the tests read only tracked files (four CSVs, `NEGF_all.mat`, config). There is no Git LFS and no test touches `results/`, the cache or figures. The workflow installs CPU torch plus `requirements.txt` and runs `pytest -q`; permissions are `contents: read`. A local fresh clone passes 75 tests.
+- **`model_comparison.csv` shows both naive baselines** on every row (`MAE_naive_vac_mean`, `MAE_naive_nn`).
+- **Epoch-cap check:** 4 curve-level MLP jobs with the most capped seeds, limit 1,500 → 8,000, run in their own cache folder (`mlp_epochsens_*`), so the main results are untouched. Estimated 15–30 min; actual 668 s. Result: no improvement, and 2 of 4 got worse.
+- **Prediction loading moved to `evaluate.pooled_predictions`**, shared by the figures and the uncertainty step (it used to live only in `make_figures.py`).
+
+## 2026-11-18 — Theory notebook (requested after Stage 8)
+
+- **`notebooks/WTe2_TIFET_theory.ipynb`**: 16 sections, one per component in data-flow order. Each has *what we do*, *theory* (equations), *what is optimised* (the objective, and what chooses its settings), *why it fits / how it fails here*, then the component's figures and tables.
+- **No result numbers in the text.** Every number is printed by a code cell from `results/*.csv`, so the explanations cannot drift from the data. Cells only call `wte2ml` functions or read saved files. Two plotting helpers were added to `wte2ml/plots.py` (`coefficient_path_lines`, `coverage_bars`) so the notebook draws nothing itself.
+- It reads saved results only (no refits). Verified on a fresh clone: all cells ran, no errors, 14 s. Cell `id` fields were added to both notebooks for current nbformat.

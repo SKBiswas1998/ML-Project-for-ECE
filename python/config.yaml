@@ -44,12 +44,15 @@ splits:
   temp_train_max_K: 60                 # protocol 2 (forward-chaining): train T <= 60 K, test 62-78 K
   vac_block_holdout_pct: [0.8, 1.2]    # protocol 3a: middle block of consecutive levels held out
   vac_train_max_pct: 1.5               # protocol 3b: train <= 1.5 %, test 1.6-2.0 %
-  holdout_embargo_levels: 0            # levels dropped next to a FINAL test block (0 = none, see DECISIONS)
+  holdout_embargo_levels: 1            # levels dropped from TRAINING next to the final vacancy test (Stage 7)
   cv_n_blocks: 5                       # hyperparameter CV: blocks of consecutive vacancy levels
   cv_embargo_levels: 1                 # levels dropped on each side of the held-out CV block
+  temp_step_K: 2                       # spacing of the temperature grid; levels = round(T / step)
+  cv_temp_n_blocks: 5                  # temperature_forward: CV blocks of consecutive temperatures (4-60 K)
+  cv_temp_embargo_levels: 1            # temperatures dropped on each side of the held-out CV block
 
 inputs:
-  vacancy_features: [vac_pct, n_vac_atoms]   # each model is run once per vacancy encoding
+  vacancy_features: [vac_pct]          # Stage 7: n_vac_atoms dropped; Stage 4 showed median MAE ratio 1.0 (results/encoding_comparison_stage4.csv)
   gate_decimals: 6                     # gate values rounded to this for exact per-gate grouping
 
 experiments:
@@ -58,9 +61,11 @@ experiments:
   curve_targets: [log10_Ion_Ioff, log10_Ion_Ioff_min, log10_SPD, log10_DED, log10_tau_d,
                   log10_P_dyn, swing_mV_per_dec]   # per curve, inputs (T, vacancy)
   cv_scoring: neg_mean_squared_error
-  mlp_targets: [log10_I, log10_Ion_Ioff, log10_Ion_Ioff_min, swing_mV_per_dec]  # SPD = Ion/Ioff copy; P_dyn, DED, tau ~constant
+  mlp_targets: [log10_I, log10_Ion_Ioff, log10_Ion_Ioff_min, log10_SPD, log10_DED, log10_tau_d,
+                log10_P_dyn, swing_mV_per_dec]   # Stage 7: every target, same as the classical models
   mlp_vacancy_feature: vac_pct         # Stage 4: encoding made no difference (median MAE ratio 1.0)
   mlp_iv_mode: curve_output           # log10_I: input (T, vac) -> 20 outputs per curve (638 rows, not 12,760)
+  mlp_iv_max_epochs: 8000             # log10_I only: 1,500 was hit by every supplied-split seed; patience still decides
 
 models:
   ridge:
@@ -73,7 +78,7 @@ models:
     max_iter: [100, 300]               # number of trees
     learning_rate: 0.1
   gp:                                  # one GP per gate point for log10_I; <= 638 points each
-    kernels: [rbf, matern25]           # chosen per fit by log marginal likelihood (not CV, see DECISIONS)
+    kernels: [rbf, matern25]           # kernel family chosen by blocked CV (Stage 7); hyperparameters by marginal likelihood
     length_scale_bounds: [0.05, 100.0] # standardised units; 0.05 < one vacancy step (~0.17) -> levels may decorrelate
     noise_init: 1.0e-3                 # WhiteKernel start; absorbs non-smooth NEGF structure
     noise_bounds: [1.0e-8, 1.0]
@@ -92,8 +97,51 @@ models:
     seeds: [0, 1, 2, 3, 4]             # initialisation seeds; tuning uses the first
   seed: 0                              # random_state for every stochastic sklearn model
 
+unsupervised:                          # descriptive only: fitted on all 798 curves, never used to predict
+  pca_max_components: 10               # of 20 gate points
+  cluster_variance_kept: 0.99          # cluster on the fewest PCs explaining this share of variance
+  k_range: [2, 3, 4, 5, 6]
+  gmm_covariance: full
+  n_init: 10                           # restarts for k-means and the Gaussian mixture
+  ion_ioff_class_edges: [4.0, 9.0]     # log10 Ion/Ioff: < 4 failed, 4-9 degraded, >= 9 working.
+                                       # 9 = sparse region of the histogram (13 of 798 curves in 9-11);
+                                       # 4 = our choice of a minimum usable on/off ratio (a convention)
+  class_names: [failed, degraded, working]
+
+robustness:                            # Gaussian noise on TEST inputs; model fitted once on clean data
+  protocols: [supplied, vacancy_block] # interpolation and unseen-vacancy cases
+  targets: [log10_Ion_Ioff]            # headline target
+  models: [naive_vac_mean, naive_nn, ridge, poly_ridge, boosting, gp, mlp]
+  noise_fractions: [0.0, 0.25, 0.5, 1.0]   # noise std as a fraction of one grid step per input
+  repeats: 5                           # noise draws per level
+  gate_step_V: 0.1                     # gate grid step (only used for per-gate-point targets)
+  seed: 0
+
+figures:
+  headline_target: log10_Ion_Ioff      # Stage 7 decision; log10_Ion_Ioff_min reported as sensitivity
+  error_map_models: [naive_vac_mean, boosting, gp, mlp]
+  iv_sample_T_K:                       # a test temperature of each protocol (curves: lowest/middle/highest test vacancy)
+    supplied: 40
+    temperature_forward: 70
+    vacancy_block: 40
+    vacancy_extrapolation: 40
+
+uncertainty:                           # Stage 8: cluster bootstrap over whole vacancy levels, saved predictions only
+  n_boot: 2000                         # bootstrap samples
+  confidence: 0.95                     # two-sided interval level (Bonferroni-adjusted one also reported)
+  seed: 0
+
+epoch_sensitivity:                     # Stage 8: do capped curve-level MLP jobs change with a higher cap?
+  max_epochs: 8000                     # same limit as the I-V MLP; patience still decides when to stop
+  jobs:                                # (protocol, target): most capped seeds in results/metrics_mlp.csv
+    - [vacancy_extrapolation, log10_Ion_Ioff]
+    - [vacancy_extrapolation, log10_Ion_Ioff_min]
+    - [vacancy_extrapolation, swing_mV_per_dec]
+    - [vacancy_block, swing_mV_per_dec]
+
 compute:
   device: cpu                          # never assume CUDA
   torch_threads: 1                     # per MLP fit; fits run in parallel instead (small nets scale poorly)
-  n_jobs: 2                            # parallel fits; 4 ran the PC out of memory during the MLP run
+  n_jobs: 4                            # parallel fits for the classical step (GP, grid search)
+  mlp_n_jobs: 1                        # MLP fits run serially (4 parallel MLP fits ran the PC out of memory)
   num_workers: 0                       # DataLoader workers; 0 is required on Windows

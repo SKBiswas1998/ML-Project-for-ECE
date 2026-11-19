@@ -101,30 +101,6 @@ def _gp_kernel(name: str, n_dims: int, cfg_gp: dict[str, Any]):
     return ConstantKernel(1.0) * base + WhiteKernel(cfg_gp["noise_init"], tuple(cfg_gp["noise_bounds"]))
 
 
-class KernelSelectGP(RegressorMixin, BaseEstimator):
-    """GP regression that fits each candidate kernel and keeps the highest log marginal likelihood.
-
-    The marginal likelihood is the GP's own criterion for kernel hyperparameters,
-    so using it for the kernel family too avoids 5-fold CV (x10 fits of 3-6 s each).
-    Inputs should be standardised (done by the surrounding Pipeline).
-    """
-
-    def __init__(self, kernels: tuple = (), n_restarts_optimizer: int = 0, random_state: int = 0):
-        self.kernels = kernels
-        self.n_restarts_optimizer = n_restarts_optimizer
-        self.random_state = random_state
-
-    def fit(self, X: np.ndarray, y: np.ndarray) -> KernelSelectGP:
-        fits = [GaussianProcessRegressor(k, normalize_y=True, random_state=self.random_state,
-                                         n_restarts_optimizer=self.n_restarts_optimizer).fit(X, y)
-                for k in self.kernels]
-        self.gp_ = max(fits, key=lambda g: g.log_marginal_likelihood_value_)
-        return self
-
-    def predict(self, X: np.ndarray, return_std: bool = False):
-        return self.gp_.predict(X, return_std=return_std)
-
-
 def _curve_model(name: str, cfg: dict[str, Any]) -> tuple[Any, dict[str, list]]:
     """Estimator and grid for a model acting on (T, vacancy) columns only."""
     m, seed = cfg["models"], cfg["models"]["seed"]
@@ -133,9 +109,12 @@ def _curve_model(name: str, cfg: dict[str, Any]) -> tuple[Any, dict[str, list]]:
     if name == "naive_nn":
         return make_pipeline(StandardScaler(), KNeighborsRegressor(n_neighbors=1)), {}
     if name == "gp":
-        kernels = tuple(_gp_kernel(k, 2, m["gp"]) for k in m["gp"]["kernels"])
-        gp = KernelSelectGP(kernels, m["gp"]["n_restarts_optimizer"], seed)
-        return make_pipeline(StandardScaler(), gp), {}
+        # Kernel family chosen by blocked CV (Stage 7 decision); length scales and noise of the
+        # chosen kernel are still fitted by marginal likelihood inside each fit.
+        gp = GaussianProcessRegressor(normalize_y=True, random_state=seed,
+                                      n_restarts_optimizer=m["gp"]["n_restarts_optimizer"])
+        kernels = [_gp_kernel(k, 2, m["gp"]) for k in m["gp"]["kernels"]]
+        return make_pipeline(StandardScaler(), gp), {"gaussianprocessregressor__kernel": kernels}
     raise ValueError(name)
 
 

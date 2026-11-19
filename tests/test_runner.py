@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 import run_experiments as R
 from wte2ml.config import load_config
@@ -25,3 +26,15 @@ def test_curve_output_rows_match_iv_rows():
     assert np.array_equal(merged["y"].to_numpy(), merged["log10_I"].to_numpy())
     # CV folds are curve positions inside the training pool, never test curves.
     assert all(max(tr.max(), va.max()) < len(split.train) for tr, va in d["cv"])
+
+
+def test_memory_log_appends_one_row_per_job(tmp_path):
+    """Each newly computed job adds a row with its time and this process's memory, so growth
+    over a run can be read off the log (cached jobs add nothing)."""
+    log = tmp_path / "memory_log.csv"
+    job = {"protocol": "p", "feature": "f", "target": "t"}
+    R._log_memory(log, job, 1.5)
+    R._log_memory(log, job, 2.5)
+    rows = pd.read_csv(log)
+    assert len(rows) == 2 and rows.job_seconds.tolist() == [1.5, 2.5]
+    assert (rows.rss_MB > 0).all() and {"peak_MB", "pid"} <= set(rows.columns)

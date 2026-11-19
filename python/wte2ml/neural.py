@@ -63,7 +63,10 @@ class MLPRegressor(RegressorMixin, BaseEstimator):
         val = curve_holdout_mask(X, self.early_stop_fraction, np.random.default_rng(self.seed))
         Xs, ys = self._tensor((X - self.x_mean_) / self.x_std_), self._tensor((y - self.y_mean_) / self.y_std_)
         self.net_ = build_network(X.shape[1], y.shape[1], self.width, self.depth, self.dropout).to(self.device)
-        self.best_epoch_, self.best_val_mse_ = self._train(Xs[~val], ys[~val], Xs[val], ys[val])
+        self.best_epoch_, self.stop_epoch_, self.best_val_mse_ = self._train(
+            Xs[~val], ys[~val], Xs[val], ys[val])
+        # True if training ran out of epochs instead of being stopped by patience.
+        self.hit_epoch_cap_ = self.stop_epoch_ == self.max_epochs - 1
         return self
 
     def _epoch(self, opt, loss_fn, Xt: torch.Tensor, yt: torch.Tensor, gen: torch.Generator) -> None:
@@ -74,9 +77,10 @@ class MLPRegressor(RegressorMixin, BaseEstimator):
             loss_fn(self.net_(Xt[idx]), yt[idx]).backward()
             opt.step()
 
-    def _train(self, Xt, yt, Xv, yv) -> tuple[int, float]:
+    def _train(self, Xt, yt, Xv, yv) -> tuple[int, int, float]:
         """Training loop; every ``eval_every`` epochs checks the held-out curves and keeps
-        the best weights; stops after ``patience`` epochs without improvement."""
+        the best weights; stops after ``patience`` epochs without improvement.
+        Returns (best epoch, last epoch run, best validation MSE)."""
         opt = torch.optim.AdamW(self.net_.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
         gen = torch.Generator().manual_seed(self.seed)
         loss_fn, best, best_epoch, state = nn.MSELoss(), float("inf"), 0, None
@@ -92,7 +96,7 @@ class MLPRegressor(RegressorMixin, BaseEstimator):
             elif epoch - best_epoch >= self.patience:
                 break
         self.net_.load_state_dict(state)
-        return best_epoch, best
+        return best_epoch, epoch, best
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         """(n,) or (n, k) predictions (same shape as the fitted y) in original units."""
