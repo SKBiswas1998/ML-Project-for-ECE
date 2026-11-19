@@ -117,7 +117,7 @@ def figure_pca_clusters(cfg: dict[str, Any], out_dir: Path, column: str = "kmean
 
 
 PROTOCOLS = ["supplied", "temperature_forward", "vacancy_block", "vacancy_extrapolation"]
-MODELS = ["naive_vac_mean", "naive_nn", "ridge", "poly_ridge", "boosting", "gp", "mlp"]
+FIGURE_MODELS = ["naive_vac_mean", "naive_nn", "ridge", "poly_ridge", "boosting", "gp", "mlp"]
 
 
 def _save(fig, out_dir: Path, name: str) -> Path:
@@ -146,9 +146,9 @@ def figure_pred_vs_true(pred: pd.DataFrame, target: str, out_dir: Path) -> Path:
     """Grid: rows = protocols, columns = models; predicted vs true for one target."""
     sub = pred[pred.target == target]
     lims = (float(sub.y_true.min()) - 0.5, float(sub.y_true.max()) + 0.5)
-    fig, axes = plt.subplots(len(PROTOCOLS), len(MODELS), figsize=(2.1 * len(MODELS), 2.1 * len(PROTOCOLS)))
+    fig, axes = plt.subplots(len(PROTOCOLS), len(FIGURE_MODELS), figsize=(2.1 * len(FIGURE_MODELS), 2.1 * len(PROTOCOLS)))
     for r, protocol in enumerate(PROTOCOLS):
-        for c, model in enumerate(MODELS):
+        for c, model in enumerate(FIGURE_MODELS):
             cell = sub[(sub.protocol == protocol) & (sub.model == model)]
             predicted_vs_true(axes[r, c], cell, f"{protocol}\n{model}", lims)
     fig.supxlabel(f"true {target}"); fig.supylabel(f"predicted {target}")
@@ -179,8 +179,8 @@ def figure_error_profiles(pred: pd.DataFrame, target: str, out_dir: Path) -> Pat
     fig, axes = plt.subplots(2, len(PROTOCOLS), figsize=(4 * len(PROTOCOLS), 6.5))
     for c, protocol in enumerate(PROTOCOLS):
         cell = sub[sub.protocol == protocol]
-        error_profile(axes[0, c], cell, "vac_pct", MODELS, f"{protocol}: error vs vacancy")
-        error_profile(axes[1, c], cell, "T_K", MODELS, f"{protocol}: error vs temperature")
+        error_profile(axes[0, c], cell, "vac_pct", FIGURE_MODELS, f"{protocol}: error vs vacancy")
+        error_profile(axes[1, c], cell, "T_K", FIGURE_MODELS, f"{protocol}: error vs temperature")
     axes[0, 0].legend(fontsize=6)
     return _save(fig, out_dir, f"error_profiles_{target}.png")
 
@@ -214,8 +214,8 @@ def figure_robustness(res: Path, out_dir: Path) -> Path:
 def figure_comparison_table(table: pd.DataFrame, target: str, out_dir: Path) -> Path:
     """Model x protocol MAE table for one target as an image (best per protocol in bold)."""
     wide = table[table.target == target].pivot(index="model", columns="protocol", values="MAE")
-    wide = wide.reindex(index=MODELS, columns=PROTOCOLS)
-    fig, ax = plt.subplots(figsize=(8, 0.4 * len(MODELS) + 1))
+    wide = wide.reindex(index=FIGURE_MODELS, columns=PROTOCOLS)
+    fig, ax = plt.subplots(figsize=(8, 0.4 * len(FIGURE_MODELS) + 1))
     ax.axis("off")
     t = ax.table(cellText=wide.map(lambda v: f"{v:.3f}").to_numpy(), rowLabels=wide.index,
                  colLabels=wide.columns, loc="center")
