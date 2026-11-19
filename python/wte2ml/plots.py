@@ -67,3 +67,26 @@ def robustness_lines(ax, summary: pd.DataFrame, title: str) -> None:
                     ms=3, lw=1, capsize=2, label=model)
     ax.set(xlabel="input noise (std, fraction of one grid step)", ylabel="test MAE (decades)", title=title)
     ax.title.set_fontsize(8)
+
+
+def coefficient_path_lines(ax, alphas: np.ndarray, path: np.ndarray, names: list[str]) -> None:
+    """Ridge coefficients (standardised inputs) vs the penalty alpha, one line per feature."""
+    for j, name in enumerate(names):
+        ax.plot(alphas, path[:, j], lw=1, label=name)
+    ax.set_xscale("log")
+    ax.axhline(0, color="0.6", lw=0.8)
+    ax.set(xlabel="penalty alpha", ylabel="coefficient (standardised input)", title="Ridge coefficient path")
+    ax.legend(fontsize=6, ncol=2)
+
+
+def coverage_bars(ax, cover: pd.DataFrame, target: str) -> None:
+    """Empirical coverage of the GP's 68 % and 95 % intervals per protocol, against nominal lines."""
+    sub = cover[cover.target == target].reset_index(drop=True)
+    x = np.arange(len(sub))
+    ax.bar(x - 0.2, sub.coverage_68, 0.4, label="inside +/- 1 std")
+    ax.bar(x + 0.2, sub.coverage_95, 0.4, label="inside +/- 1.96 std")
+    for level, style in ((0.6827, "--"), (0.95, ":")):
+        ax.axhline(level, color="0.3", ls=style, lw=1)
+    ax.set_xticks(x, sub.protocol, rotation=15, fontsize=7)
+    ax.set(ylim=(0, 1.05), ylabel="share of test points", title=f"GP interval coverage: {target}")
+    ax.legend(fontsize=7)
