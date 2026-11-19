@@ -1,7 +1,7 @@
 """Produce figures/*.png. Run from the repo root:  .\\.venv\\Scripts\\python python\\make_figures.py
 
-Stage 2 adds only the swing-extraction check; later stages add result figures
-that read results/*.csv.
+Diagnostic figures (swing check, PCA) and the Stage 7 report figures. Result figures read
+results/*.csv only; plotting primitives live in wte2ml.plots.
 """
 from __future__ import annotations
 
@@ -15,6 +15,8 @@ from scipy.interpolate import PchipInterpolator
 
 from wte2ml.config import load_config, repo_path
 from wte2ml.data import curve_matrix, load_dataset
+from wte2ml.evaluate import comparison_table
+from wte2ml.plots import error_profile, heatmap, iv_with_bands, predicted_vs_true, robustness_lines
 from wte2ml.targets import falling_branch, swing_table
 
 
@@ -114,6 +116,141 @@ def figure_pca_clusters(cfg: dict[str, Any], out_dir: Path, column: str = "kmean
     return path
 
 
+PROTOCOLS = ["supplied", "temperature_forward", "vacancy_block", "vacancy_extrapolation"]
+MODELS = ["naive_vac_mean", "naive_nn", "ridge", "poly_ridge", "boosting", "gp", "mlp"]
+
+
+def _save(fig, out_dir: Path, name: str) -> Path:
+    fig.tight_layout()
+    path = out_dir / name
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+def load_predictions(res: Path) -> pd.DataFrame:
+    """All test predictions: classical models as stored; MLP averaged over its seeds."""
+    classical = pd.read_csv(res / "predictions_classical.csv.gz")
+    mlp = pd.read_csv(res / "predictions_mlp.csv.gz")
+    keys = ["protocol", "feature", "target", "T_K", "vac_pct", "gate_V"]
+    mlp = (mlp.assign(gate_V=mlp.gate_V.fillna(-1)).groupby(keys, as_index=False)
+           .agg(y_true=("y_true", "first"), y_pred=("y_pred", "mean"))
+           .assign(model="mlp", y_std=np.nan))
+    mlp["gate_V"] = mlp.gate_V.replace(-1, np.nan)
+    return pd.concat([classical, mlp], ignore_index=True)
+
+
+def figure_ratio_heatmap(res: Path, out_dir: Path) -> Path:
+    """log10 Ion/Ioff (supplied end-point definition) over the full T x vacancy grid."""
+    curves = pd.read_csv(res / "curve_targets.csv")
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    im = heatmap(ax, curves, "log10_Ion_Ioff", "log10 Ion/Ioff (all 798 curves)")
+    fig.colorbar(im, ax=ax, label="log10 Ion/Ioff (decades)")
+    return _save(fig, out_dir, "ion_ioff_heatmap.png")
+
+
+def figure_pred_vs_true(pred: pd.DataFrame, target: str, out_dir: Path) -> Path:
+    """Grid: rows = protocols, columns = models; predicted vs true for one target."""
+    sub = pred[pred.target == target]
+    lims = (float(sub.y_true.min()) - 0.5, float(sub.y_true.max()) + 0.5)
+    fig, axes = plt.subplots(len(PROTOCOLS), len(MODELS), figsize=(2.1 * len(MODELS), 2.1 * len(PROTOCOLS)))
+    for r, protocol in enumerate(PROTOCOLS):
+        for c, model in enumerate(MODELS):
+            cell = sub[(sub.protocol == protocol) & (sub.model == model)]
+            predicted_vs_true(axes[r, c], cell, f"{protocol}\n{model}", lims)
+    fig.supxlabel(f"true {target}"); fig.supylabel(f"predicted {target}")
+    return _save(fig, out_dir, f"pred_vs_true_{target}.png")
+
+
+def figure_error_maps(pred: pd.DataFrame, target: str, models: list[str], out_dir: Path) -> Path:
+    """|error| of each test curve over the T x vacancy grid; rows = protocols, cols = models."""
+    sub = pred[pred.target == target].assign(abs_err=lambda d: (d.y_pred - d.y_true).abs())
+    vmax = float(sub.abs_err.quantile(0.98))
+    fig, axes = plt.subplots(len(PROTOCOLS), len(models), figsize=(3.4 * len(models), 2.9 * len(PROTOCOLS)),
+                             layout="constrained")
+    for r, protocol in enumerate(PROTOCOLS):
+        for c, model in enumerate(models):
+            cell = sub[(sub.protocol == protocol) & (sub.model == model)]
+            im = heatmap(axes[r, c], cell, "abs_err", f"{protocol}: {model}", "magma", 0, vmax)
+            axes[r, c].title.set_fontsize(8)
+    fig.colorbar(im, ax=axes, label=f"|error| in {target} (decades)", shrink=0.6)
+    path = out_dir / f"error_map_{target}.png"
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
+def figure_error_profiles(pred: pd.DataFrame, target: str, out_dir: Path) -> Path:
+    """MAE vs vacancy (top) and vs temperature (bottom), one column per protocol."""
+    sub = pred[pred.target == target]
+    fig, axes = plt.subplots(2, len(PROTOCOLS), figsize=(4 * len(PROTOCOLS), 6.5))
+    for c, protocol in enumerate(PROTOCOLS):
+        cell = sub[sub.protocol == protocol]
+        error_profile(axes[0, c], cell, "vac_pct", MODELS, f"{protocol}: error vs vacancy")
+        error_profile(axes[1, c], cell, "T_K", MODELS, f"{protocol}: error vs temperature")
+    axes[0, 0].legend(fontsize=6)
+    return _save(fig, out_dir, f"error_profiles_{target}.png")
+
+
+def figure_iv_samples(pred: pd.DataFrame, cfg: dict[str, Any], out_dir: Path) -> Path:
+    """Sample I-V curves (rows = protocols) with GP mean +/- 2 std, boosting and MLP."""
+    iv = pred[pred.target == cfg["experiments"]["point_target"]]
+    fig, axes = plt.subplots(len(PROTOCOLS), 3, figsize=(3.6 * 3, 2.8 * len(PROTOCOLS)))
+    for r, protocol in enumerate(PROTOCOLS):
+        cell = iv[iv.protocol == protocol]
+        T = cfg["figures"]["iv_sample_T_K"][protocol]
+        levels = np.sort(cell[cell.T_K == T].vac_pct.unique())
+        for c, vac in enumerate(levels[[0, len(levels) // 2, -1]]):   # lowest, middle, highest test level
+            curve = cell[(cell.T_K == T) & np.isclose(cell.vac_pct, vac)]
+            iv_with_bands(axes[r, c], curve, ["gp", "boosting", "mlp"], f"{protocol}: {T} K, {vac:.1f} %")
+    axes[0, 0].legend(fontsize=6)
+    return _save(fig, out_dir, "iv_samples_gp_bands.png")
+
+
+def figure_robustness(res: Path, out_dir: Path) -> Path:
+    """Test MAE vs Gaussian input-noise level, one panel per protocol."""
+    s = pd.read_csv(res / "robustness_summary.csv")
+    protocols = list(dict.fromkeys(s.protocol))
+    fig, axes = plt.subplots(1, len(protocols), figsize=(5.5 * len(protocols), 4), squeeze=False)
+    for ax, protocol in zip(axes[0], protocols):
+        robustness_lines(ax, s[s.protocol == protocol], f"{protocol}: {s.target.iloc[0]}")
+    axes[0, 0].legend(fontsize=7)
+    return _save(fig, out_dir, "robustness_noise.png")
+
+
+def figure_comparison_table(table: pd.DataFrame, target: str, out_dir: Path) -> Path:
+    """Model x protocol MAE table for one target as an image (best per protocol in bold)."""
+    wide = table[table.target == target].pivot(index="model", columns="protocol", values="MAE")
+    wide = wide.reindex(index=MODELS, columns=PROTOCOLS)
+    fig, ax = plt.subplots(figsize=(8, 0.4 * len(MODELS) + 1))
+    ax.axis("off")
+    t = ax.table(cellText=wide.map(lambda v: f"{v:.3f}").to_numpy(), rowLabels=wide.index,
+                 colLabels=wide.columns, loc="center")
+    for c, protocol in enumerate(PROTOCOLS):
+        t[(int(np.argmin(wide[protocol].to_numpy())) + 1, c)].set_text_props(fontweight="bold")
+    ax.set_title(f"MAE (decades), {target}; bold = best per protocol", fontsize=9)
+    return _save(fig, out_dir, f"model_comparison_{target}.png")
+
+
+def report_figures(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
+    """Every Stage 7 figure plus results/model_comparison.csv."""
+    res = repo_path(cfg, "results_dir")
+    feature = cfg["inputs"]["vacancy_features"][0]          # never mix vacancy encodings in a figure
+    table = comparison_table(pd.read_csv(res / "metrics_classical.csv"), pd.read_csv(res / "metrics_mlp.csv"))
+    table = table[table.feature == feature]
+    table.to_csv(res / "model_comparison.csv", index=False)
+    pred = load_predictions(res)
+    pred = pred[pred.feature == feature]
+    head = cfg["figures"]["headline_target"]
+    paths = [figure_ratio_heatmap(res, out_dir), figure_iv_samples(pred, cfg, out_dir),
+             figure_robustness(res, out_dir)]
+    for target in (head, cfg["experiments"]["point_target"]):
+        paths += [figure_pred_vs_true(pred, target, out_dir), figure_error_profiles(pred, target, out_dir),
+                  figure_comparison_table(table, target, out_dir),
+                  figure_error_maps(pred, target, cfg["figures"]["error_map_models"], out_dir)]
+    return paths
+
+
 def main() -> None:
     plt.switch_backend("Agg")   # file output only, no window
     cfg = load_config()
@@ -121,6 +258,8 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     print(figure_swing_check(cfg, out_dir))
     print(figure_pca_clusters(cfg, out_dir))
+    for path in report_figures(cfg, out_dir):
+        print(path)
 
 
 if __name__ == "__main__":
