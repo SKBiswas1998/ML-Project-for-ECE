@@ -156,3 +156,5 @@ $$ \widehat{\mathrm{Err}}(\theta) = \frac{1}{K}\sum_{k=1}^{K} \frac{1}{|B_k|}\su
 **Equation.** $\widehat{\mathrm{cov}}_z = \frac1n \sum_i \mathbb 1\big[|y_i - \mu_i| \le z\,\sigma_i\big]$, with z = 1 (68.27 %) or 1.96 (95 %).
 **Why here.** The proposal promised uncertainty estimates; coverage tests whether they mean anything.
 **Failure mode here.** Calibration holds only where the GP has seen the layout. Beyond the trained vacancy range the coverage collapses (0–65 % at the nominal 95 %), because the GP's σ does not grow fast enough for a genuinely new layout.
+
+**build_standalone_notebook.py** (tooling, not part of the data flow) turns the package into `notebooks/WTe2_TIFET_standalone.ipynb`, one cell per function or class, so the whole pipeline can run on Kaggle/Colab with only the data downloaded. `tests/test_standalone_notebook.py` keeps the notebook in sync with the code.
