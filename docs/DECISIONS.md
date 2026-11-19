@@ -142,3 +142,9 @@ Results that changed (for the full story see `docs/REPORT_NOTES.md`):
 - **`model_comparison.csv` shows both naive baselines** on every row (`MAE_naive_vac_mean`, `MAE_naive_nn`).
 - **Epoch-cap check:** 4 curve-level MLP jobs with the most capped seeds, limit 1,500 → 8,000, run in their own cache folder (`mlp_epochsens_*`), so the main results are untouched. Estimated 15–30 min; actual 668 s. Result: no improvement, and 2 of 4 got worse.
 - **Prediction loading moved to `evaluate.pooled_predictions`**, shared by the figures and the uncertainty step (it used to live only in `make_figures.py`).
+
+## 2026-11-18 — Theory notebook (requested after Stage 8)
+
+- **`notebooks/WTe2_TIFET_theory.ipynb`**: 16 sections, one per component in data-flow order. Each has *what we do*, *theory* (equations), *what is optimised* (the objective, and what chooses its settings), *why it fits / how it fails here*, then the component's figures and tables.
+- **No result numbers in the text.** Every number is printed by a code cell from `results/*.csv`, so the explanations cannot drift from the data. Cells only call `wte2ml` functions or read saved files. Two plotting helpers were added to `wte2ml/plots.py` (`coefficient_path_lines`, `coverage_bars`) so the notebook draws nothing itself.
+- It reads saved results only (no refits). Verified on a fresh clone: all cells ran, no errors, 14 s. Cell `id` fields were added to both notebooks for current nbformat.
