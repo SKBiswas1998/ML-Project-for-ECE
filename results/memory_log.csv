@@ -1,0 +1,17 @@
+finished,pid,protocol,feature,target,job_seconds,rss_MB,peak_MB
+2026-11-18 19:02:11,23272,vacancy_block,vac_pct,log10_I,470.99,48.8,393.7
+2026-11-18 19:03:29,23272,vacancy_block,vac_pct,log10_Ion_Ioff,77.76,65.5,393.7
+2026-11-18 19:06:31,23272,vacancy_block,vac_pct,log10_Ion_Ioff_min,181.65,35.5,393.7
+2026-11-18 19:10:12,23272,vacancy_block,vac_pct,log10_SPD,220.93,37.4,393.7
+2026-11-18 19:12:26,23272,vacancy_block,vac_pct,log10_DED,133.63,36.8,393.7
+2026-11-18 19:14:48,23272,vacancy_block,vac_pct,log10_tau_d,142.29,39.7,393.7
+2026-11-18 19:16:53,23272,vacancy_block,vac_pct,log10_P_dyn,124.92,42.6,393.7
+2026-11-18 19:18:47,23272,vacancy_block,vac_pct,swing_mV_per_dec,113.44,44.7,393.7
+2026-11-18 19:25:38,9168,vacancy_extrapolation,vac_pct,log10_I,400.8,72.6,397.9
+2026-11-18 19:27:47,9168,vacancy_extrapolation,vac_pct,log10_Ion_Ioff,128.83,77.8,397.9
+2026-11-18 19:29:32,9168,vacancy_extrapolation,vac_pct,log10_Ion_Ioff_min,104.86,74.2,397.9
+2026-11-18 19:31:38,9168,vacancy_extrapolation,vac_pct,log10_SPD,126.02,74.3,397.9
+2026-11-18 19:33:36,9168,vacancy_extrapolation,vac_pct,log10_DED,117.68,67.7,397.9
+2026-11-18 19:36:41,9168,vacancy_extrapolation,vac_pct,log10_tau_d,185.63,67.1,397.9
+2026-11-18 19:38:45,9168,vacancy_extrapolation,vac_pct,log10_P_dyn,123.19,74.0,397.9
+2026-11-18 19:40:39,9168,vacancy_extrapolation,vac_pct,swing_mV_per_dec,114.09,72.1,397.9
