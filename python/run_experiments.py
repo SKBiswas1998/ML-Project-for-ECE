@@ -24,11 +24,12 @@ from sklearn.base import clone
 
 from wte2ml.config import load_config, repo_path
 from wte2ml.data import curve_matrix, load_dataset
-from wte2ml.evaluate import regression_metrics, skill_score
+from wte2ml.evaluate import pooled_predictions, regression_metrics, skill_score
 from wte2ml.models import MODELS, NAIVE_MODELS, build_model, features, tune_and_fit
 from wte2ml.robustness import input_steps, noise_curve, summarise
 from wte2ml.splits import Split, all_protocols, blocked_cv_folds, fold_indices
 from wte2ml.targets import curve_targets
+from wte2ml.uncertainty import gp_coverage, task_bootstrap
 from wte2ml.unsupervised import (
     cluster,
     cluster_scores,
@@ -426,8 +427,76 @@ def step_robustness(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
     return paths
 
 
+def _per_seed(pred: pd.DataFrame, meta: dict[str, Any], cap: int) -> pd.DataFrame:
+    """Per-seed MAE of one MLP job, with the epoch each seed stopped at and whether it hit ``cap``."""
+    stops, bests = json.loads(meta["stop_epochs"]), json.loads(meta["best_epochs"])
+    rows = [{"seed": s, "MAE": regression_metrics(g.y_true, g.y_pred)["MAE"]} for s, g in pred.groupby("seed")]
+    return pd.DataFrame(rows).assign(max_epochs=cap, stop_epoch=stops, best_epoch=bests,
+                                     hit_cap=[st == cap - 1 for st in stops])
+
+
+def step_epoch_sensitivity(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
+    """Re-run selected curve-level MLP jobs with a higher epoch limit; compare per seed with the
+    main run (results/metrics_mlp.csv). Own cache folder and output: main results are untouched."""
+    e = cfg["epoch_sensitivity"]
+    high = _mlp_cfg(cfg)
+    high = {**high, "models": {**high["models"], "mlp": {**high["models"]["mlp"], "max_epochs": e["max_epochs"]}}}
+    ds = load_dataset(cfg)
+    curves = curve_targets(ds.metrics_pooled(), ds.iv_pooled(), cfg)
+    splits = {s.name: s for s in all_protocols(curves, cfg)}
+    cache = repo_path(cfg, "cache_dir") / f"mlp_epochsens_{_config_hash(high, 'mlp')}"
+    cache.mkdir(parents=True, exist_ok=True)
+    base = pd.read_csv(out_dir / "metrics_mlp.csv")
+    rows = []
+    for protocol, target in e["jobs"]:
+        job = {"protocol": protocol, "feature": cfg["experiments"]["mlp_vacancy_feature"], "target": target}
+        pred, meta = _cached(cache, job, partial(run_mlp_job, high, splits[protocol], curves, target),
+                             tag=splits[protocol].fingerprint(), memory_log=out_dir / "memory_log.csv")
+        old = base[(base.protocol == protocol) & (base.target == target)].sort_values("seed")
+        old_meta = {k: old[k].iloc[0] for k in ("stop_epochs", "best_epochs")}
+        rows.append(_per_seed(pred, meta, e["max_epochs"]).assign(protocol=protocol, target=target,
+                                                                   fit_seconds=meta["fit_seconds"]))
+        base_seed = old[["seed", "MAE"]].assign(max_epochs=cfg["models"]["mlp"]["max_epochs"],
+                                                stop_epoch=json.loads(old_meta["stop_epochs"]),
+                                                best_epoch=json.loads(old_meta["best_epochs"]))
+        rows.append(base_seed.assign(hit_cap=base_seed.stop_epoch == cfg["models"]["mlp"]["max_epochs"] - 1,
+                                     protocol=protocol, target=target, fit_seconds=old.fit_seconds.iloc[0]))
+    path = out_dir / "epoch_sensitivity.csv"
+    pd.concat(rows, ignore_index=True).to_csv(path, index=False)
+    return [path]
+
+
+def _best_naive(classical: pd.DataFrame) -> pd.Series:
+    """Per (protocol, target): the naive baseline with the lower test MSE (the skill reference)."""
+    naive = classical[classical.model.isin(NAIVE_MODELS)]
+    return naive.loc[naive.groupby(["protocol", "target"]).MSE.idxmin()].set_index(["protocol", "target"]).model
+
+
+def step_uncertainty(cfg: dict[str, Any], out_dir: Path) -> list[Path]:
+    """Cluster-bootstrap CIs (whole vacancy levels) of every test MAE, paired differences vs the
+    best naive baseline, and GP interval coverage. Reads saved predictions only; no refits."""
+    u, step = cfg["uncertainty"], cfg["splits"]["vac_step_pct"]
+    classical = pd.read_csv(out_dir / "metrics_classical.csv")
+    pred = pooled_predictions(pd.read_csv(out_dir / "predictions_classical.csv.gz"),
+                              pd.read_csv(out_dir / "predictions_mlp.csv.gz"))
+    pred = pred[pred.feature == cfg["inputs"]["vacancy_features"][0]]
+    reference = _best_naive(classical)
+    models = sorted(pred.model.unique())
+    n_comp = len(reference) * (len(models) - 1)
+    parts = [task_bootstrap(g, models, reference[k], u, step, n_comp).assign(protocol=k[0], target=k[1])
+             for k, g in pred.groupby(["protocol", "target"])]
+    gp = pred[pred.model == "gp"]
+    cover = pd.DataFrame([{"protocol": k[0], "target": k[1], **gp_coverage(g)}
+                          for k, g in gp.groupby(["protocol", "target"])])
+    paths = [out_dir / "bootstrap_ci.csv", out_dir / "gp_coverage.csv"]
+    pd.concat(parts, ignore_index=True).to_csv(paths[0], index=False)
+    cover.assign(nominal_68=0.6827, nominal_95=0.95).to_csv(paths[1], index=False)
+    return paths
+
+
 STEPS = {"targets": step_targets, "splits": step_splits, "classical": step_classical,
-         "mlp": step_mlp, "unsupervised": step_unsupervised, "robustness": step_robustness}
+         "mlp": step_mlp, "unsupervised": step_unsupervised, "robustness": step_robustness,
+         "epoch_sensitivity": step_epoch_sensitivity, "uncertainty": step_uncertainty}
 
 
 def main() -> None:

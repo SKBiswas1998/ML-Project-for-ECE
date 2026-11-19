@@ -126,6 +126,19 @@ figures:
     vacancy_block: 40
     vacancy_extrapolation: 40
 
+uncertainty:                           # Stage 8: cluster bootstrap over whole vacancy levels, saved predictions only
+  n_boot: 2000                         # bootstrap samples
+  confidence: 0.95                     # two-sided interval level (Bonferroni-adjusted one also reported)
+  seed: 0
+
+epoch_sensitivity:                     # Stage 8: do capped curve-level MLP jobs change with a higher cap?
+  max_epochs: 8000                     # same limit as the I-V MLP; patience still decides when to stop
+  jobs:                                # (protocol, target): most capped seeds in results/metrics_mlp.csv
+    - [vacancy_extrapolation, log10_Ion_Ioff]
+    - [vacancy_extrapolation, log10_Ion_Ioff_min]
+    - [vacancy_extrapolation, swing_mV_per_dec]
+    - [vacancy_block, swing_mV_per_dec]
+
 compute:
   device: cpu                          # never assume CUDA
   torch_threads: 1                     # per MLP fit; fits run in parallel instead (small nets scale poorly)
