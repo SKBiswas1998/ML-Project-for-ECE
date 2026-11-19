@@ -122,3 +122,17 @@ $$ \widehat{\mathrm{Err}}(\theta) = \frac{1}{K}\sum_{k=1}^{K} \frac{1}{|B_k|}\su
 **Equation (k-means objective; silhouette of point i).** $\min_{\{C_j\},\{\mu_j\}} \sum_j \sum_{i \in C_j} \lVert z_i - \mu_j \rVert^2, \qquad s_i = \frac{b_i - a_i}{\max(a_i, b_i)}$ ($a_i$: mean distance to its own cluster, $b_i$: to the nearest other cluster).
 **Why here.** It asks whether the devices fall into natural groups (working, degraded, failed) without being told the labels.
 **Failure mode here.** The data are not blobs. Each vacancy level traces a thin *strand* through PCA space as temperature changes, so the clusters cut the set of strands into bands of vacancy levels. The silhouette is then middling and nearly flat in k, and BIC keeps falling as k grows (noiseless data, no natural k).
+
+## Modules added in Stage 7
+
+**robustness.py** tests how a fitted model's error grows when its test inputs are perturbed. `input_steps` gives each input's grid step (2 K, 0.1 %, 0.1 V), `noisy` adds Gaussian noise of a chosen fraction of that step, `noise_curve` scores one model at every noise level and repeat, and `summarise` averages over repeats. `run_experiments.py robustness` writes `results/robustness_noise.csv` and `results/robustness_summary.csv`.
+
+**plots.py** holds the plotting primitives for the report figures (`heatmap`, `predicted_vs_true`, `error_profile`, `iv_with_bands`, `robustness_lines`). Each draws on a given axis from tables read from `results/*.csv`, so figures cannot compute numbers of their own. **evaluate.comparison_table** builds `results/model_comparison.csv`: one row per protocol × target × model with MAE, RMSE, R², skill, MLP seed spread and rank.
+
+**splits.py (changed):** each `Split` now carries a `cv_axis`. The 62–78 K protocol is tuned on blocks of consecutive temperatures, the others on vacancy blocks. `Split.fingerprint()` hashes the exact train/test curves for cache keys. Final vacancy tests now drop 1 neighbouring level from training.
+
+## Technique: input-noise robustness (supervised learning: evaluation)
+**Idea.** A surrogate should not change its answer wildly when its inputs are slightly wrong. We fit each model once on clean data, then predict the test set again with Gaussian noise added to temperature and vacancy, and watch the test error as the noise grows. Noise is measured in grid steps of each input, so "¼ step" means 0.5 K and 0.025 % vacancy.
+**Equation.** $\mathrm{MAE}(\sigma) = \mathbb{E}_{\varepsilon}\big[\tfrac1n\sum_i |\hat f(x_i + \varepsilon_i) - y_i|\big],\ \varepsilon_{ij} \sim \mathcal N(0, (\sigma\,\Delta_j)^2)$, with $\Delta_j$ the grid step of input j.
+**Why here.** It separates two very different reasons for a low test error: smooth physics the model has learned, or an exact look-up of the right device in a dense grid.
+**Failure mode here.** Vacancy is really a *label* for one specific layout, not a continuous measurement. Noise on it partly tests "what if we picked the neighbouring layout". The test is informative about the surrogate's behaviour but is not a model of real measurement error.
