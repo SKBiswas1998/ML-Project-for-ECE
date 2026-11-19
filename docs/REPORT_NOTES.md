@@ -48,7 +48,9 @@ Every number below comes from a file in `results/`, cited in brackets. A few com
 
 **An earlier win did not survive.** Before the 1-level embargo the MLP led on vacancy extrapolation of log10 Ion/Ioff (1.080 ± 0.343, DECISIONS Stage 5). With 1.5 % removed from training it fell to 4.378 ± 3.280. That win depended on one training level.
 
-**Training status.** The 20 I–V seed fits all stopped by early stopping (`seeds_hit_epoch_cap` = 0, limit 8,000). Of the 140 curve-level seed fits, 51 reached the 1,500-epoch limit, so some curve-level MLPs are under-trained.
+**Training status.** The 20 I–V seed fits all stopped by early stopping (`seeds_hit_epoch_cap` = 0, limit 8,000). Of the 140 curve-level seed fits, 51 reached the 1,500-epoch limit. **Under-training does not explain the failures** (section 12): with the limit raised to 8,000 on four of the most-capped jobs, no seed hits the cap and the MAE stays the same or gets worse.
+
+**Two ways to score the MLP.** The tables above report the *mean of the 5 per-seed MAEs*, i.e. what one trained MLP achieves. The bootstrap (section 12) and the figures use the *5-seed ensemble*, which averages the predictions and is never worse. The gap can be large: extrapolation log10 SPD is 5.726 per seed against 1.601 for the ensemble [`bootstrap_ci.csv`], because the seeds err in different directions.
 
 ## 6. Input-noise robustness [`robustness_summary.csv`, `figures/robustness_noise.png`]
 Gaussian noise was added to the test inputs (T, vacancy) with a standard deviation of 0, ¼, ½ and 1 grid step (2 K, 0.1 %), 5 draws per level, on log10 Ion/Ioff.
@@ -86,3 +88,60 @@ Peak memory per MLP process was 394 MB (vacancy block) and 398 MB (extrapolation
 3. **Coarse gate grid** (20 points, 0.1 V). Single steps drop up to 5.37 decades (Stage 0 data profile, DECISIONS), so the swing depends on the interpolation method.
 4. **Simulation, not experiment.** The data come from non-self-consistent NEGF (no Poisson solve) for one fixed geometry, so the surrogates reproduce that model only.
 5. **Small test sets per protocol** (160–190 curves from 5–38 levels), so the differences between close models (e.g. 0.698 vs. 0.743) are not tested for significance. Stage 8 bootstrap intervals would be needed.
+
+## 12. Stage 8: how certain are these numbers?
+
+### Cluster-bootstrap confidence intervals [`bootstrap_ci.csv`]
+Resampling unit = **whole vacancy level** (2,000 resamples), computed from the saved test predictions with no refits. Curves of one layout are strongly dependent, so resampling single curves would treat 38 near-copies as independent and give intervals that are far too narrow. A test on clustered data shows the curve-wise interval is more than 5× narrower than the level-wise one.
+
+| Target | Protocol | Best model | Levels in test | MAE | 95 % CI |
+|---|---|---|---|---|---|
+| log10 Ion/Ioff | supplied | GP | 19 | 0.001 | 0.001–0.001 |
+| log10 Ion/Ioff | temperature_forward | GP | 21 | 0.067 | 0.048–0.088 |
+| log10 Ion/Ioff | vacancy_block | naive per-vacancy mean | **5** | 0.698 | **0.403–0.970** |
+| log10 Ion/Ioff | vacancy_extrapolation | ridge | **5** | 2.204 | **1.440–2.969** |
+| log10 I | vacancy_block | GP | 5 | 0.668 | 0.648–0.685 |
+| log10 I | vacancy_extrapolation | naive per-vacancy mean | 5 | 0.633 | 0.416–0.849 |
+
+- **Vacancy tests contain only 5 levels**, so their intervals are wide and coarse: 5 levels allow only 126 distinct resamples. This is the honest uncertainty of a single-layout dataset.
+- **Paired comparisons with the best naive baseline:** the same resampled levels are used for both models. 192 comparisons were made (32 tasks × 6 models), so a Bonferroni-adjusted interval (level 1 − 0.05/192) is also reported. With that correction, **20 of 192 comparisons show a model significantly better than the best naive baseline, and 103 significantly worse**.
+  - **Better:** the GP on all 8 supplied-split targets and on 4 targets at 62–78 K. On log10 Ion/Ioff at 62–78 K the adjusted interval just includes 0 (−0.423 to 0.008).
+  - **Better on unseen vacancy:** only a few — boosting for DED and τ_d and polynomial ridge for swing on the block; ridge for log10 Ion/Ioff, Ion/Ioff (min) and SPD on extrapolation; boosting for P_dyn and the MLP ensemble for SPD on extrapolation.
+- The MLP's comparisons use its 5-seed ensemble (section 5).
+
+### GP predictive-interval coverage [`gp_coverage.csv`]
+Nominal 68.3 % (±1σ) and 95 % (±1.96σ):
+- **Known layouts mostly overcover** (intervals too wide, i.e. conservative): log10 I 91.8 % / 96.9 % on the supplied split and 91.4 % / 97.5 % at 62–78 K. 18 of the 32 protocol × target cells exceed both nominal levels.
+- **Undercover on the supplied split:** log10 DED and τ_d, 78.1 % / **90.0 %**, so the 95 % interval misses one point in ten.
+- **Undercover on the vacancy block:**
+  - DED 29.5 % / 76.3 %
+  - τ_d 34.7 % / 84.7 %
+  - Ion/Ioff (min) 40.5 % at 68 %
+  - swing 8.9 % at 68 %
+  - log10 I 71.3 % / **92.0 %** (slightly under at 95 %)
+  - Headline log10 Ion/Ioff is *over*covered there (98.4 % / 100 %) because its σ is large (mean 2.09 decades).
+- **Severe undercoverage on vacancy extrapolation:**
+  - log10 Ion/Ioff 0 % / 40 %
+  - Ion/Ioff (min) 0 % / 0 %
+  - SPD 0 % / 40 %
+  - DED 0 % / 45.8 %
+  - τ_d 0 % / 48.4 %
+  - log10 I 43.6 % / 65.4 %
+  - swing 21.6 % / 24.7 %
+
+  The GP's error bars cannot be trusted beyond the trained vacancy range. Only P_dyn (nearly constant) covers fully.
+
+### Epoch-cap sensitivity of the MLP [`epoch_sensitivity.csv`]
+Four of the most-capped curve-level jobs, re-run with an 8,000-epoch limit (no seed capped; the latest stop was at epoch 4,225). Mean ± std over 5 seeds, 1,500 → 8,000 epochs:
+- vacancy_block swing 140.0 ± 50.4 → 136.7 ± 50.4 mV/dec
+- vacancy_extrapolation log10 Ion/Ioff 4.378 ± 3.280 → 4.410 ± 3.259
+- log10 Ion/Ioff (min) 2.949 ± 1.790 → **3.145 ± 2.158** (worse)
+- swing 114.6 ± 38.2 → **181.4 ± 100.2** (worse)
+
+Seeds that had stopped early before give identical results. **Longer training does not rescue extrapolation and can make it worse.** Cost: 668 s.
+
+### Ridge from scratch [`python/wte2ml/ridge_numpy.py`, `tests/test_ridge_numpy.py`]
+The closed-form NumPy ridge (standardised inputs, unpenalised intercept) matches the pipeline's StandardScaler + sklearn Ridge to **1e-8** in predictions and coefficients, on the real cubic-feature log10 Ion/Ioff task at α = 1e-4, 1e-2, 1 and 100. Effective degrees of freedom $\sum d_j^2/(d_j^2+\alpha)$ equal p at α = 0 and fall monotonically towards 0.
+
+### Continuous integration [`.github/workflows/tests.yml`]
+On every push and pull request it installs CPU-only dependencies and runs `pytest` only. It has a read-only repository token, never runs the pipeline and never pushes. The tests need only tracked files (the four supplied CSVs, `NEGF_all.mat`, the config). Verified locally: 75 tests pass on a fresh clone with no results or cache files (17.7 s). Not yet verified on GitHub's Linux runner; the first push will do that.

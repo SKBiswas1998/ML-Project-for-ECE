@@ -60,3 +60,11 @@ We tightened the tests and re-ran everything once, consistently. The vacancy tes
 - **Where errors live.** On unseen layouts the errors form vertical stripes in the temperature × vacancy map (`figures/error_map_log10_Ion_Ioff.png`): they depend on the layout, not on temperature.
 
 The take-home for the class: with one random defect layout, a surrogate can learn how temperature changes a known device very well. It cannot learn what a *different* defect arrangement would do, because the data never show one.
+
+## Stage 8: how sure are we?
+We put error bars on every reported error, without retraining anything. Numbers are from `results/bootstrap_ci.csv` and `results/gp_coverage.csv`.
+- **Error bars must respect the layouts.** We resample whole vacancy levels, not single curves, because curves of one layout are near-copies. For the unseen-vacancy tests there are only 5 levels, so the intervals are wide: the best on/off-ratio error on the held-out block is 0.70 decades, with a 95 % interval of 0.40–0.97.
+- **After correcting for 192 comparisons**, only 20 model-versus-baseline differences are significantly better, and most are the GP on known layouts.
+- **The GP's own error bars are trustworthy only where it has seen the layout.** On known layouts they are, if anything, too cautious. When extrapolating to 1.6–2.0 % vacancy, the true on/off ratio falls inside its "95 %" interval only 40 % of the time.
+- **Training the MLP longer does not help.** Removing the epoch limit on four of its worst jobs left the error unchanged or made it worse.
+- **Checks on the code:** ridge regression re-written from scratch in NumPy matches the library to 1e-8, and an automatic GitHub check now runs all 75 tests on every push.

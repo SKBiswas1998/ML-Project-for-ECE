@@ -136,3 +136,23 @@ $$ \widehat{\mathrm{Err}}(\theta) = \frac{1}{K}\sum_{k=1}^{K} \frac{1}{|B_k|}\su
 **Equation.** $\mathrm{MAE}(\sigma) = \mathbb{E}_{\varepsilon}\big[\tfrac1n\sum_i |\hat f(x_i + \varepsilon_i) - y_i|\big],\ \varepsilon_{ij} \sim \mathcal N(0, (\sigma\,\Delta_j)^2)$, with $\Delta_j$ the grid step of input j.
 **Why here.** It separates two very different reasons for a low test error: smooth physics the model has learned, or an exact look-up of the right device in a dense grid.
 **Failure mode here.** Vacancy is really a *label* for one specific layout, not a continuous measurement. Noise on it partly tests "what if we picked the neighbouring layout". The test is informative about the surrogate's behaviour but is not a model of real measurement error.
+
+## Modules added in Stage 8
+
+**uncertainty.py** computes confidence intervals for the reported test errors from the saved predictions. `level_sums` aggregates |error| per vacancy level, `resample_levels` and `bootstrap_mae` give the cluster bootstrap, `task_bootstrap` adds paired differences against the reference model with plain and Bonferroni intervals, and `gp_coverage` measures how often the truth falls inside the GP's 68 % / 95 % intervals. `run_experiments.py uncertainty` writes `results/bootstrap_ci.csv` and `results/gp_coverage.csv` in about a second.
+
+**ridge_numpy.py** is ridge regression written out in NumPy (`fit_ridge`, `effective_dof`, `coefficient_path`). It is a teaching companion to the sklearn model the pipeline uses and is checked against it to 1e-8.
+
+**run_experiments.py epoch_sensitivity** re-runs selected MLP jobs with a higher epoch limit in a separate cache folder and writes `results/epoch_sensitivity.csv`. **.github/workflows/tests.yml** runs the unit tests on GitHub (tests only, read-only).
+
+## Technique: cluster bootstrap (statistics for model evaluation)
+**Idea.** To see how much a test error would change with a different but similar test set, we redraw the test set many times with replacement and recompute the error. The units we redraw must be independent. Curves of one vacancy level share one defect layout and are near-copies, so the unit is a whole vacancy level with all its curves, not a single curve.
+**Equation.** For a resample $b$ of levels $\ell^{(b)}_1..\ell^{(b)}_L$: $\mathrm{MAE}^{(b)} = \sum_k S_{\ell_k^{(b)}} / \sum_k N_{\ell_k^{(b)}}$, with $S_\ell$ the summed |error| and $N_\ell$ the number of test rows at level ℓ. The 95 % interval is the 2.5th–97.5th percentile over $b$.
+**Why here.** Curve-level resampling would treat 190 dependent curves as 190 independent samples and report intervals about 5× too narrow (`tests/test_uncertainty.py`).
+**Failure mode here.** The vacancy tests have only 5 levels, so only 126 distinct resamples exist. The intervals are coarse and wide, and the bootstrap cannot estimate the uncertainty from the *one* layout we have.
+
+## Technique: predictive-interval coverage (supervised learning: GP uncertainty)
+**Idea.** A GP gives each prediction a standard deviation σ. If it is calibrated, the truth should fall inside ±1σ about 68 % of the time and inside ±1.96σ about 95 % of the time. We count how often it does on each test set.
+**Equation.** $\widehat{\mathrm{cov}}_z = \frac1n \sum_i \mathbb 1\big[|y_i - \mu_i| \le z\,\sigma_i\big]$, with z = 1 (68.27 %) or 1.96 (95 %).
+**Why here.** The proposal promised uncertainty estimates; coverage tests whether they mean anything.
+**Failure mode here.** Calibration holds only where the GP has seen the layout. Beyond the trained vacancy range the coverage collapses (0–65 % at the nominal 95 %), because the GP's σ does not grow fast enough for a genuinely new layout.

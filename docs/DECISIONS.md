@@ -130,3 +130,15 @@ Implementation choices:
 Results that changed (for the full story see `docs/REPORT_NOTES.md`):
 - The MLP's Stage 5 win on vacancy extrapolation of log10 Ion/Ioff (1.080 ± 0.343) **did not survive the embargo**: 4.378 ± 3.280, against ridge 2.204 [`results/mlp_vs_classical.csv`].
 - 51 of 140 curve-level MLP seed fits reached the 1,500-epoch limit (none of the 20 I–V fits did) [`results/metrics_mlp.csv`].
+
+## 2026-11-18 — Stage 8 (uncertainty, coverage, ridge from scratch, CI, epoch-cap check)
+
+- **Cluster bootstrap over whole vacancy levels** (your rule 1), 2,000 resamples, on the saved predictions with no refits. *Rejected:* resampling single curves, which treats 38 near-copies of one layout as independent; a test shows that gives intervals more than 5× too narrow on clustered data. Also *rejected:* a two-way bootstrap over vacancy × temperature. With 5 levels in the vacancy tests, the level clustering already dominates, and temperature curves inside a level are not independent either.
+- **Paired comparisons** use the better naive baseline by test MSE (the skill reference) as reference, with the same resampled levels for both models. **192 comparisons are counted** (32 tasks × 6 models), and a Bonferroni-adjusted interval at 1 − 0.05/192 is reported next to the plain 95 % one.
+- **MLP in the bootstrap = its 5-seed ensemble** (mean prediction); `model_comparison.csv` keeps the mean of the per-seed MAEs. Both are now labelled in REPORT_NOTES. The classical models agree between the two files to 1e-14.
+- **GP coverage:** nominal 68.27 % (±1σ) and 95 % (±1.96σ) per protocol × target, plus the mean predictive σ.
+- **Ridge from scratch** (`wte2ml/ridge_numpy.py`): closed form on standardised X with an unpenalised intercept, exactly the pipeline's StandardScaler + Ridge. The test uses the real cubic-feature task at the 4 grid α values, atol 1e-8. Coefficient path and effective dof included.
+- **CI checked first** (your rule 4): the tests read only tracked files (four CSVs, `NEGF_all.mat`, config). There is no Git LFS and no test touches `results/`, the cache or figures. The workflow installs CPU torch plus `requirements.txt` and runs `pytest -q`; permissions are `contents: read`. A local fresh clone passes 75 tests.
+- **`model_comparison.csv` shows both naive baselines** on every row (`MAE_naive_vac_mean`, `MAE_naive_nn`).
+- **Epoch-cap check:** 4 curve-level MLP jobs with the most capped seeds, limit 1,500 → 8,000, run in their own cache folder (`mlp_epochsens_*`), so the main results are untouched. Estimated 15–30 min; actual 668 s. Result: no improvement, and 2 of 4 got worse.
+- **Prediction loading moved to `evaluate.pooled_predictions`**, shared by the figures and the uncertainty step (it used to live only in `make_figures.py`).

@@ -6,3 +6,5 @@ finished,step,seconds,n_jobs
 2026-11-18 19:40:39,mlp,1301.9,1
 2026-11-18 19:40:51,mlp,2.3,1
 2026-11-18 19:45:09,robustness,252.98,4
+2026-11-18 20:17:01,uncertainty,1.19,4
+2026-11-18 20:27:12,epoch_sensitivity,667.67,4

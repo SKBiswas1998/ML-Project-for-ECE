@@ -15,3 +15,7 @@ finished,pid,protocol,feature,target,job_seconds,rss_MB,peak_MB
 2026-11-18 19:36:41,9168,vacancy_extrapolation,vac_pct,log10_tau_d,185.63,67.1,397.9
 2026-11-18 19:38:45,9168,vacancy_extrapolation,vac_pct,log10_P_dyn,123.19,74.0,397.9
 2026-11-18 19:40:39,9168,vacancy_extrapolation,vac_pct,swing_mV_per_dec,114.09,72.1,397.9
+2026-11-18 20:19:11,11880,vacancy_extrapolation,vac_pct,log10_Ion_Ioff,186.36,166.0,394.6
+2026-11-18 20:21:16,11880,vacancy_extrapolation,vac_pct,log10_Ion_Ioff_min,125.17,113.1,394.6
+2026-11-18 20:24:31,11880,vacancy_extrapolation,vac_pct,swing_mV_per_dec,194.83,99.1,394.6
+2026-11-18 20:27:12,11880,vacancy_block,vac_pct,swing_mV_per_dec,160.73,98.1,394.6
